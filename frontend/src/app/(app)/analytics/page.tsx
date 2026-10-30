@@ -112,17 +112,17 @@ export default function AnalyticsPage() {
       {/* ── Hour × Day heatmap ── */}
       <section className="bg-surface border border-border rounded-card p-4">
         <h2 className="text-sm font-semibold text-text-primary mb-1">
-          Performance by Hour × Day (UTC)
+          Execution Distribution by Hour × Trading Day (UTC)
         </h2>
         <p className="text-xs text-text-secondary mb-3">
-          Color = avg R multiple. Grey = fewer than 3 trades (unreliable sample).
+          Color intensity indicates average R-multiple efficiency across global liquidity sessions.
         </p>
 
         {loading ? (
           <p className="text-text-secondary text-sm">Loading…</p>
         ) : total === 0 ? (
           <p className="text-text-secondary text-sm">
-            No trade data yet. Run the bot in paper mode to populate this heatmap.
+            No historical execution data recorded yet. Heatmap updates automatically as closed trades accumulate.
           </p>
         ) : (
           <div className="overflow-x-auto">

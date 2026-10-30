@@ -243,7 +243,7 @@ export default function AccountsPage() {
         );
 
       setPassword("");
-      setSuccess(`Child account ${label} (${acctId}) successfully linked to Copier!`);
+      setSuccess(`Sub-account ${label} (${acctId}) successfully linked to Copier!`);
       setShowForm(false);
       setLabel("");
       setLogin("");
@@ -253,13 +253,13 @@ export default function AccountsPage() {
       // Refresh list
       await fetchCopierAccounts(true);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to register child account.");
+      setError(err instanceof Error ? err.message : "Failed to register sub-account.");
     } finally {
       setSaving(false);
     }
   }
 
-  // ── Toggle Child Copying ───────────────────────────────────────────────────
+  // ── Toggle Sub-Account Replication ─────────────────────────────────────────
   async function handleToggle(accountId: number) {
     setTogglingId(accountId);
     try {
@@ -303,7 +303,7 @@ export default function AccountsPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setSuccess("GLOBAL KILL SWITCH EXECUTED: All positions on Master and Child accounts closed immediately.");
+        setSuccess("GLOBAL KILL SWITCH EXECUTED: All positions on Primary and Sub-Accounts closed immediately.");
         await fetchCopierAccounts(true);
       } else {
         throw new Error("Failed to execute emergency liquidation.");
@@ -335,7 +335,7 @@ export default function AccountsPage() {
             </span>
           </div>
           <p className="text-sm text-text-secondary mt-1">
-            Keep <strong>1 MT5 window</strong> open. The bot trades the master and replicates deals across all child accounts in &lt;200ms without opening extra tabs.
+            Ultra-low latency portfolio replication. The engine executes on your primary master terminal and mirrors orders across all connected sub-accounts in &lt;200ms with exact proportional risk sizing.
           </p>
         </div>
 
@@ -355,7 +355,7 @@ export default function AccountsPage() {
               className="flex items-center gap-2 bg-accent hover:bg-blue-600 text-white text-sm font-semibold px-4 py-2.5 rounded-inner transition-all shadow-sm active:scale-95 min-h-[44px]"
             >
               <Plus className="w-4 h-4" />
-              Add Child Account
+              Link Sub-Account
             </button>
           )}
         </div>
@@ -369,7 +369,7 @@ export default function AccountsPage() {
             ${totalEquity.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
           <span className="text-[11px] text-profit flex items-center gap-1 mt-1 font-medium">
-            ● Master + {children.length} Children
+            ● Master + {children.length} Sub-Accounts
           </span>
         </div>
 
@@ -417,14 +417,14 @@ export default function AccountsPage() {
           <div>
             <h3 className="text-sm font-semibold text-loss">Global Emergency Kill Switch</h3>
             <p className="text-xs text-text-secondary mt-0.5">
-              Liquidates all open positions across the <strong>Master account and ALL Child accounts</strong> immediately and halts engine signal generation.
+              Liquidates all open positions across the <strong>Primary master account and ALL connected sub-accounts</strong> immediately and halts engine signal generation.
             </p>
           </div>
         </div>
 
         <ConfirmDialog
           title="EXECUTE GLOBAL KILL SWITCH?"
-          description="This will immediately close EVERY open position on your Master account AND all connected Child accounts at market price. This cannot be undone."
+          description="This will immediately close EVERY open position on your Primary account AND all connected sub-accounts at market price. This cannot be undone."
           confirmLabel="Yes, Liquidate All Accounts"
           danger
           onConfirm={handleGlobalKillSwitch}
@@ -458,14 +458,14 @@ export default function AccountsPage() {
         </div>
       )}
 
-      {/* ── Add Child Account Form ── */}
+      {/* ── Link Sub-Account Form ── */}
       {showForm && (
         <section className="bg-surface border border-border rounded-card overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-surface-2/40">
             <div className="flex items-center gap-2">
               <Plus className="w-4 h-4 text-accent" />
               <h2 className="text-sm font-semibold text-text-primary">
-                Add Exness Child Trading Account
+                Link Exness Managed Sub-Account
               </h2>
             </div>
             <button
@@ -596,7 +596,7 @@ export default function AccountsPage() {
                   disabled={saving}
                   className="px-6 py-2.5 bg-accent hover:bg-blue-600 disabled:opacity-50 text-white font-semibold rounded-inner text-sm flex items-center gap-2 min-h-[44px]"
                 >
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save & Link Child Account"}
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save & Link Sub-Account"}
                 </button>
               </div>
             </form>
@@ -675,13 +675,13 @@ export default function AccountsPage() {
         )}
       </section>
 
-      {/* ── 2. Child Accounts List (Copy Targets) ── */}
+      {/* ── 2. Connected Sub-Accounts (Replication Targets) ── */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-accent" />
             <h2 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
-              2. Connected Child Accounts ({children.length})
+              2. Connected Sub-Accounts ({children.length})
             </h2>
           </div>
           <span className="text-xs text-text-secondary">
@@ -695,9 +695,9 @@ export default function AccountsPage() {
               <Layers className="w-6 h-6" />
             </div>
             <div>
-              <p className="font-semibold text-text-primary">No Child Accounts Linked Yet</p>
+              <p className="font-semibold text-text-primary">No Sub-Accounts Linked Yet</p>
               <p className="text-xs text-text-secondary mt-1 max-w-sm mx-auto">
-                Add child accounts to copy trades automatically without opening more MT5 windows on your laptop.
+                Link secondary or investor accounts to automatically mirror primary execution with exact proportional risk sizing.
               </p>
             </div>
             <button
@@ -705,7 +705,7 @@ export default function AccountsPage() {
               className="inline-flex items-center gap-2 px-4 py-2 bg-accent hover:bg-blue-600 text-white rounded-inner text-xs font-semibold"
             >
               <Plus className="w-4 h-4" />
-              Add First Child Account
+              Link First Sub-Account
             </button>
           </div>
         ) : (

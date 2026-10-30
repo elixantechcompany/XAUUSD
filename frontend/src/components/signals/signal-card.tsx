@@ -58,7 +58,7 @@ export function SignalCard({ signal, onExecuteManual }: SignalCardProps) {
           tp: signal.take_profit,
         }),
       });
-      setExecutedNotice("Trade dispatched to Master MT5 Terminal & Child Copier Accounts!");
+      setExecutedNotice("Trade dispatched to Master MT5 Terminal & Synchronized Sub-Accounts!");
     } catch {
       setExecutedNotice("Signal logged for manual execution.");
     } finally {

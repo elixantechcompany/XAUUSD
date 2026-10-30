@@ -77,16 +77,6 @@ export function DesktopSidebar() {
             </Link>
           );
         })}
-
-        <div className="pt-3 border-t border-[#1B2535]/80 mt-3 space-y-1">
-          <Link
-            href="/"
-            className="flex items-center gap-3 px-3.5 py-2 rounded-inner text-xs font-medium text-text-secondary hover:text-white hover:bg-[#121821] transition-colors"
-          >
-            <Globe className="w-4 h-4 text-text-secondary" />
-            Landing Page
-          </Link>
-        </div>
       </nav>
 
       {/* Footer Status & Sign Out */}

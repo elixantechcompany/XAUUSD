@@ -41,17 +41,6 @@ export function TopBar() {
           </Link>
         </div>
 
-        {/* Global Landing link on desktop top right */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-text-secondary">
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 hover:text-gold transition-colors font-medium px-2.5 py-1 rounded bg-[#121821] border border-[#243043]"
-          >
-            <Globe className="w-3.5 h-3.5 text-gold" />
-            Landing Page
-          </Link>
-        </div>
-
         {/* Status Indicators & Fast Sign Out */}
         <div className="flex items-center gap-3 ml-auto">
           <StatusPill
