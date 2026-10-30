@@ -35,8 +35,11 @@ from sqlalchemy.orm import Session
 
 from src.agents.coordinator import CentralCoordinator
 from src.config.settings import get_settings
+from src.execution.mt5_executor import MT5Executor
+from src.execution.multi_account_copier import ChildAccountConfig, MultiAccountCopier
 from src.journal.models import DailyRiskState, JournalEntry
 from src.state.models import Order, Setup, SetupState
+from src.utils.credentials import CredentialManager
 from src.utils.database import get_db, init_db
 from src.utils.logging_config import get_logger
 
@@ -44,6 +47,26 @@ log = get_logger(__name__)
 
 # Central coordinator instance for API deliberations and kill switch
 coordinator = CentralCoordinator()
+
+# Multi-Account Copier Engine (in-process single-terminal execution)
+cred_mgr = CredentialManager()
+master_executor = MT5Executor(credentials=cred_mgr.get_credentials())
+copier_engine = MultiAccountCopier(master_executor=master_executor)
+
+try:
+    for _child_entry in cred_mgr.get_child_accounts():
+        copier_engine.add_child_account(
+            ChildAccountConfig(
+                account_id=_child_entry["account_id"],
+                password=_child_entry["password"],
+                server=_child_entry["server"],
+                label=_child_entry.get("label", ""),
+                risk_multiplier=_child_entry.get("risk_multiplier", 1.0),
+            )
+        )
+except Exception as _e:
+    log.warning("failed_preloading_child_accounts", error=str(_e))
+
 
 
 @asynccontextmanager
@@ -540,4 +563,168 @@ def list_orders(
         }
         for r in rows
     ]
+
+
+# ── Multi-Account Copier Endpoints ──────────────────────────────────────────
+
+class AddChildAccountRequest(BaseModel):
+    account_id: int
+    password: str
+    server: str
+    label: str = ""
+    risk_pct: float = 1.0
+    risk_multiplier: float = 1.0
+    is_active: bool = True
+    max_slippage_pips: float = 3.0
+
+
+@app.get("/copier/accounts", tags=["Copier"])
+def list_copier_accounts():
+    """List Master account and all connected Child accounts with live balances and status."""
+    master_creds = cred_mgr.get_credentials()
+    master_id = master_creds.account_id if master_creds else 0
+    master_server = master_creds.server if master_creds else "Not configured"
+
+    is_terminal_online = False
+    live_balances = {}
+    try:
+        import MetaTrader5 as mt5
+        if mt5.terminal_info() is not None:
+            is_terminal_online = True
+            live_balances = copier_engine.get_all_account_balances()
+    except Exception:
+        is_terminal_online = False
+
+    master_data = live_balances.get(str(master_id), {
+        "label": "Master Account",
+        "server": master_server,
+        "balance": 0.0,
+        "equity": 0.0,
+        "margin_free": 0.0,
+        "is_master": True,
+        "is_active": True,
+        "account_id": master_id,
+        "status": "ONLINE" if is_terminal_online else "OFFLINE",
+    })
+    master_data["account_id"] = master_id
+    master_data["server"] = master_server
+
+    children = []
+    for c in copier_engine.get_child_accounts():
+        child_live = live_balances.get(str(c.account_id), {})
+        children.append({
+            "account_id": c.account_id,
+            "label": c.label or f"Child #{c.account_id}",
+            "server": c.server,
+            "risk_multiplier": c.risk_multiplier,
+            "is_active": c.is_active,
+            "balance": child_live.get("balance", 0.0),
+            "equity": child_live.get("equity", 0.0),
+            "margin_free": child_live.get("margin_free", 0.0),
+            "status": "ONLINE" if is_terminal_online else "SAVED",
+        })
+
+    return {
+        "terminal_online": is_terminal_online,
+        "master": master_data,
+        "children": children,
+        "total_children": len(children),
+        "active_children": len([c for c in children if c["is_active"]]),
+    }
+
+
+@app.post("/copier/accounts", tags=["Copier"])
+def register_child_account(req: AddChildAccountRequest):
+    """Securely register a new Child account into Windows Credential Manager and Copier Engine."""
+    stored = cred_mgr.store_child_account(
+        account_id=req.account_id,
+        password=req.password,
+        server=req.server,
+        label=req.label,
+        risk_multiplier=req.risk_multiplier,
+    )
+    if not stored:
+        raise HTTPException(status_code=500, detail="Failed to store child account in Credential Manager.")
+
+    copier_engine.add_child_account(
+        ChildAccountConfig(
+            account_id=req.account_id,
+            password=req.password,
+            server=req.server,
+            label=req.label,
+            risk_pct=req.risk_pct,
+            risk_multiplier=req.risk_multiplier,
+            is_active=req.is_active,
+            max_slippage_pips=req.max_slippage_pips,
+        )
+    )
+    return {
+        "status": "ok",
+        "message": f"Child account {req.account_id} registered successfully for copy trading.",
+        "account_id": req.account_id,
+    }
+
+
+@app.delete("/copier/accounts/{account_id}", tags=["Copier"])
+def unregister_child_account(account_id: int):
+    """Remove a Child copy-trading account."""
+    cred_mgr.delete_child_account(account_id)
+    copier_engine.remove_child_account(account_id)
+    return {
+        "status": "ok",
+        "message": f"Child account {account_id} removed successfully.",
+        "account_id": account_id,
+    }
+
+
+@app.post("/copier/accounts/{account_id}/toggle", tags=["Copier"])
+def toggle_child_copying(account_id: int):
+    """Toggle copy trading active state for a child account."""
+    if account_id in copier_engine.child_accounts:
+        curr = copier_engine.child_accounts[account_id].is_active
+        copier_engine.child_accounts[account_id].is_active = not curr
+        return {
+            "status": "ok",
+            "account_id": account_id,
+            "is_active": not curr,
+        }
+    raise HTTPException(status_code=404, detail=f"Child account {account_id} not found.")
+
+
+@app.post("/copier/kill-switch", tags=["Copier"])
+def copier_kill_switch(db: Session = Depends(get_db)):
+    """
+    Emergency Global Kill Switch:
+    Immediately liquidates all open positions across Master and ALL Child accounts.
+    """
+    report = copier_engine.close_all_accounts_positions()
+    coordinator.trigger_kill_switch(reason="Global Copier Kill Switch executed", db=db)
+    return {
+        "status": "HALTED",
+        "action": "GLOBAL_KILL_SWITCH_EXECUTED",
+        "report": report,
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/copier/trades", tags=["Copier"])
+def get_copied_trades():
+    """Return audit log of all copied trades across accounts."""
+    return [
+        {
+            "master_ticket": t.master_ticket,
+            "child_account_id": t.child_account_id,
+            "child_ticket": t.child_ticket,
+            "symbol": t.symbol,
+            "direction": t.direction,
+            "entry_price": t.entry_price,
+            "volume": t.volume,
+            "sl": t.sl,
+            "tp": t.tp,
+            "opened_at": t.opened_at.isoformat(),
+            "status": t.status,
+        }
+        for t in reversed(copier_engine.copied_trades)
+    ]
+
 

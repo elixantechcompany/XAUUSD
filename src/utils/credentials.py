@@ -124,3 +124,80 @@ class CredentialManager:
         except Exception as exc:
             log.error("failed_to_delete_credentials", error=str(exc))
             return False
+
+    def store_child_account(
+        self,
+        account_id: int | str,
+        password: str,
+        server: str,
+        label: str = "",
+        risk_multiplier: float = 1.0,
+    ) -> bool:
+        """Store credentials for a child copy-trading account."""
+        try:
+            import keyring
+            acct_str = str(account_id)
+            keyring.set_password(self.service_name, f"{acct_str}_child_password", password)
+            keyring.set_password(self.service_name, f"{acct_str}_child_server", server)
+            keyring.set_password(self.service_name, f"{acct_str}_child_label", label)
+            keyring.set_password(self.service_name, f"{acct_str}_child_multiplier", str(risk_multiplier))
+
+            # Maintain index list of child accounts
+            existing_str = keyring.get_password(self.service_name, "child_accounts_index") or ""
+            existing_list = [x.strip() for x in existing_str.split(",") if x.strip()]
+            if acct_str not in existing_list:
+                existing_list.append(acct_str)
+                keyring.set_password(self.service_name, "child_accounts_index", ",".join(existing_list))
+
+            log.info("child_credentials_stored", account_id=acct_str, label=label)
+            return True
+        except Exception as exc:
+            log.error("failed_to_store_child_credentials", error=str(exc))
+            return False
+
+    def get_child_accounts(self) -> list[dict]:
+        """Retrieve all registered child copy-trading accounts."""
+        results: list[dict] = []
+        try:
+            import keyring
+            index_str = keyring.get_password(self.service_name, "child_accounts_index") or ""
+            acct_ids = [x.strip() for x in index_str.split(",") if x.strip()]
+
+            for acct_str in acct_ids:
+                password = keyring.get_password(self.service_name, f"{acct_str}_child_password")
+                server = keyring.get_password(self.service_name, f"{acct_str}_child_server")
+                label = keyring.get_password(self.service_name, f"{acct_str}_child_label") or f"Child #{acct_str}"
+                mult_str = keyring.get_password(self.service_name, f"{acct_str}_child_multiplier") or "1.0"
+
+                if password and server:
+                    results.append({
+                        "account_id": int(acct_str),
+                        "password": password,
+                        "server": server,
+                        "label": label,
+                        "risk_multiplier": float(mult_str),
+                    })
+        except Exception as exc:
+            log.debug("failed_to_read_child_accounts", error=str(exc))
+        return results
+
+    def delete_child_account(self, account_id: int | str) -> bool:
+        """Remove a child copy-trading account."""
+        try:
+            import keyring
+            acct_str = str(account_id)
+            for suffix in ("_child_password", "_child_server", "_child_label", "_child_multiplier"):
+                try:
+                    keyring.delete_password(self.service_name, f"{acct_str}{suffix}")
+                except Exception:
+                    pass
+
+            index_str = keyring.get_password(self.service_name, "child_accounts_index") or ""
+            acct_ids = [x.strip() for x in index_str.split(",") if x.strip() and x.strip() != acct_str]
+            keyring.set_password(self.service_name, "child_accounts_index", ",".join(acct_ids))
+
+            log.info("child_account_deleted", account_id=acct_str)
+            return True
+        except Exception as exc:
+            log.error("failed_to_delete_child_account", error=str(exc))
+            return False

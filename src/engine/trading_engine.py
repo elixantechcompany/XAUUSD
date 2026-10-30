@@ -118,6 +118,7 @@ class TradingEngine:
         now_fn=None,                 # injected clock for determinism
         git_commit: str | None = None,
         spec_hash: str | None = None,
+        copier=None,
     ) -> None:
         if settings.execution_mode == "live":
             raise ValueError("Live trading is permanently disabled (IMPL7, R88)")
@@ -126,6 +127,7 @@ class TradingEngine:
         self._market_data = market_data
         self._db_factory = db_session_factory
         self._executor = executor
+        self._copier = copier
         self._now_fn = now_fn or (lambda: datetime.now(tz=timezone.utc))
         self._git_commit = git_commit or "unknown"
         self._spec_hash = spec_hash or SPEC_HASH_PLACEHOLDER
@@ -499,7 +501,7 @@ class TradingEngine:
             machine.risk_approved(now)
 
             # Submit order
-            if self._settings.execution_mode == "paper":
+            if self._settings.execution_mode in ("paper", "demo"):
                 ask = tick["ask"] if tick else (setup.proposed_entry or 0)
                 bid = tick["bid"] if tick else (setup.proposed_entry or 0)
                 ok, msg, pos = self._executor.submit_order(
@@ -515,6 +517,10 @@ class TradingEngine:
                 )
                 if ok:
                     # Record order in DB
+                    broker_ticket = getattr(pos, "ticket", None) if pos else None
+                    filled_px = getattr(pos, "entry_price", setup.proposed_entry) if pos else setup.proposed_entry
+                    filled_vol = getattr(pos, "volume", setup.proposed_volume) if pos else setup.proposed_volume
+                    is_paper_exec = (self._settings.execution_mode == "paper")
                     order = Order(
                         id=order_client_id(setup.id, attempt=0),
                         setup_id=setup.id,
@@ -527,11 +533,12 @@ class TradingEngine:
                         requested_sl=setup.proposed_sl,
                         requested_tp=setup.proposed_tp,
                         client_order_id=order_client_id(setup.id, 0),
+                        broker_ticket=broker_ticket,
                         filled_at=now,
-                        filled_price=setup.proposed_entry,
-                        filled_volume=setup.proposed_volume,
-                        is_paper=True,
-                        sl_confirmed_by_broker=True,   # paper: always confirmed
+                        filled_price=filled_px,
+                        filled_volume=filled_vol,
+                        is_paper=is_paper_exec,
+                        sl_confirmed_by_broker=True,
                         status="FILLED",
                         spec_version=SPEC_VERSION,
                         spec_hash=self._spec_hash,
@@ -547,8 +554,16 @@ class TradingEngine:
                                   tp=setup.proposed_tp,
                                   notes=msg)
                     self._write_decision_log(db, setup, "SIGNAL",
-                                             "Order filled (paper)", equity, tick, now)
+                                             f"Order filled ({self._settings.execution_mode})", equity, tick, now)
                     result.orders_submitted += 1
+
+                    # Auto-copy order across child accounts without spawning multiple terminals
+                    if self._copier and pos:
+                        try:
+                            copied = self._copier.copy_order(pos, setup.id)
+                            log.info("copier_orders_copied", count=len(copied), setup_id=setup.id)
+                        except Exception as cop_exc:
+                            log.error("copier_dispatch_failed", setup_id=setup.id, error=str(cop_exc))
                 else:
                     machine.risk_rejected(msg, now)
                     result.orders_rejected += 1

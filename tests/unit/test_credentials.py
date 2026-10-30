@@ -61,3 +61,39 @@ class TestCredentialManager:
             assert creds.password == "EnvSecretPass!"
             assert creds.server == "Exness-Real10"
             assert creds.path == r"C:\MT5\terminal64.exe"
+
+    def test_store_and_retrieve_child_accounts(self):
+        vault: dict[tuple[str, str], str] = {}
+
+        def mock_set(service, username, password):
+            vault[(service, username)] = password
+
+        def mock_get(service, username):
+            return vault.get((service, username))
+
+        def mock_del(service, username):
+            vault.pop((service, username), None)
+
+        with patch("keyring.set_password", side_effect=mock_set), \
+             patch("keyring.get_password", side_effect=mock_get), \
+             patch("keyring.delete_password", side_effect=mock_del):
+
+            mgr = CredentialManager(service_name="test_child_vault")
+            ok = mgr.store_child_account(
+                account_id=55556666,
+                password="ChildPass123!",
+                server="Exness-MT5Trial12",
+                label="My Prop Account",
+                risk_multiplier=1.5,
+            )
+            assert ok is True
+
+            children = mgr.get_child_accounts()
+            assert len(children) == 1
+            assert children[0]["account_id"] == 55556666
+            assert children[0]["label"] == "My Prop Account"
+            assert children[0]["risk_multiplier"] == 1.5
+
+            del_ok = mgr.delete_child_account(55556666)
+            assert del_ok is True
+            assert len(mgr.get_child_accounts()) == 0
