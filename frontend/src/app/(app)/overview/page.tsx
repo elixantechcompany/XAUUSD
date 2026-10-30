@@ -8,7 +8,7 @@ import { GrokGoalTracker } from "@/components/dashboard/grok-goal-tracker";
 import { InteractiveForecastChart } from "@/components/charts/interactive-forecast-chart";
 import { MarketSessionDetector } from "@/components/signals/market-session-detector";
 import { SignalCard } from "@/components/signals/signal-card";
-import { Activity, Shield, Wifi, WifiOff, Clock, Layers, Zap } from "lucide-react";
+import { Activity, Shield, Wifi, WifiOff, Clock, Layers } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
 
 export default function OverviewPage() {
@@ -20,8 +20,12 @@ export default function OverviewPage() {
     !["CLOSED", "EXPIRED", "INVALIDATED", "REJECTED"].includes(s.state)
   );
 
-  const currentEquity = heartbeat?.equity ?? account?.equity ?? 1048.47;
-  const initialBalance = account?.balance ? Math.min(account.balance, 500) : 200.0;
+  const isOnline = heartbeat?.mt5_connected ?? false;
+  const currentEquity = heartbeat?.equity ?? account?.equity ?? null;
+  const currentBalance = heartbeat?.balance ?? account?.balance ?? null;
+  const dailyPnl = account?.daily_pnl ?? null;
+  const drawdownPct = account?.drawdown_pct ?? null;
+  const openPositions = account?.open_positions ?? 0;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16">
@@ -34,59 +38,66 @@ export default function OverviewPage() {
             </h1>
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              5-Agent Relay
+              Autonomous Engine
             </span>
           </div>
           <p className="text-xs text-text-secondary mt-1">
-            Autonomous SMC quantitative desk with sub-second execution &amp; dynamic risk protection.
+            Systematic SMC quantitative desk with sub-second execution &amp; dynamic risk protection.
           </p>
         </div>
       </div>
 
-      {/* ── 2. Hero Equity Card (Image 2 style) ── */}
+      {/* ── 2. Real Equity Portfolio Hero Card (Zero Dummy Data) ── */}
       <GrokEquityCard
         currentEquity={currentEquity}
-        initialDeposit={initialBalance}
-        winRate={83}
-        totalTrades={12}
+        balance={currentBalance}
+        dailyPnl={dailyPnl}
+        drawdownPct={drawdownPct}
+        openPositions={openPositions}
+        isOnline={isOnline}
       />
 
       {/* ── 3. Market Open / Close Automated Session Detector ── */}
       <MarketSessionDetector instrument="ALL" />
 
-      {/* ── 4. Interactive TradingView SMC Forecasting & Measuring Tool (Image 1 replica) ── */}
+      {/* ── 4. Interactive SMC Forecasting & Measuring Tool ── */}
       <section className="space-y-2">
         <InteractiveForecastChart initialInstrument="XAUUSD" />
       </section>
 
-      {/* ── 5. Autonomous 5-Agent Pipeline & Goal Progress (Image 2 style) ── */}
+      {/* ── 5. Autonomous 5-Agent Pipeline & Risk Guardian ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left: Pipeline 5-Agent Relay */}
-        <GrokAgentPipeline />
+        {/* Left: Pipeline 5-Agent Relay with Real System States */}
+        <GrokAgentPipeline
+          activeSignalsCount={activeSignals.length}
+          mt5Connected={isOnline}
+          openPositionsCount={openPositions}
+          dailyPnl={dailyPnl}
+        />
 
-        {/* Right: Goal 10x Tracker & Live Activity Feed */}
+        {/* Right: Risk Guardian & Real Activity Feed */}
         <div className="space-y-6">
           <GrokGoalTracker
-            currentMultiplier={5.24}
-            targetMultiplier={10}
-            currentEquity={currentEquity}
-            nextTargetEquity={1600}
+            currentDrawdown={drawdownPct}
+            maxDailyDrawdown={4.0}
+            maxTrailingDrawdown={6.0}
+            riskPerTradePct={1.0}
           />
           <GrokActivityFeed />
         </div>
       </div>
 
-      {/* ── 6. Live SMC Setups & Copier Engine Status ── */}
+      {/* ── 6. Copier Engine Strip ── */}
       <div className="bg-[#0D131C] border border-[#243043] rounded-card p-4 flex flex-wrap gap-4 items-center justify-between text-xs">
         <div className="flex items-center gap-2">
-          {heartbeat?.mt5_connected ? (
+          {isOnline ? (
             <Wifi className="w-4 h-4 text-emerald-400" aria-hidden />
           ) : (
             <WifiOff className="w-4 h-4 text-amber-400" aria-hidden />
           )}
           <span className="text-text-secondary font-medium">Terminal IPC:</span>
-          <span className={heartbeat?.mt5_connected ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-            {heartbeat?.mt5_connected ? "Single Process Connected" : "Local Terminal Active"}
+          <span className={isOnline ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
+            {isOnline ? "Single Process Connected" : "Local Standby (Awaiting MT5 Terminal)"}
           </span>
         </div>
 

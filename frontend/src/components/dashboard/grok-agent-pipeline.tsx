@@ -1,86 +1,88 @@
 "use client";
 
-import { Search, Shield, Zap, Activity, TrendingUp, CheckCircle2 } from "lucide-react";
+import { Search, Shield, Zap, Activity, TrendingUp } from "lucide-react";
+import { formatPnl } from "@/lib/utils";
 
-interface AgentStatus {
-  id: string;
-  name: string;
-  role: string;
-  icon: typeof Search;
-  iconBg: string;
-  iconColor: string;
-  statusText: string;
-  statusBadge: string;
-  badgeBg: string;
-  badgeColor: string;
-  inFlight?: boolean;
+interface GrokAgentPipelineProps {
+  activeSignalsCount?: number;
+  mt5Connected?: boolean;
+  openPositionsCount?: number;
+  dailyPnl?: number | null;
 }
 
-export function GrokAgentPipeline() {
-  const agents: AgentStatus[] = [
+export function GrokAgentPipeline({
+  activeSignalsCount = 0,
+  mt5Connected = false,
+  openPositionsCount = 0,
+  dailyPnl = 0,
+}: GrokAgentPipelineProps) {
+  const agents = [
     {
       id: "scout",
       name: "Scout",
-      role: "finds new FVG setups & structural liquidity",
+      role: "Fair Value Gap & structural liquidity scanner",
       icon: Search,
       iconBg: "bg-blue-600/15 border-blue-500/30",
       iconColor: "text-blue-400",
-      statusText: "XAUUSD Bearish H1 FVG spotted",
-      statusBadge: "14.1k setups",
-      badgeBg: "bg-blue-500/10 border-blue-500/25",
-      badgeColor: "text-blue-300",
-      inFlight: true,
+      statusText: activeSignalsCount > 0
+        ? `${activeSignalsCount} quantitative setup${activeSignalsCount > 1 ? "s" : ""} active`
+        : "Scanning H1 candles for XAUUSD & BTCUSD",
+      statusBadge: activeSignalsCount > 0 ? `${activeSignalsCount} ACTIVE` : "SCANNING",
+      badgeBg: activeSignalsCount > 0 ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" : "bg-blue-500/10 border-blue-500/25 text-blue-300",
+      inFlight: activeSignalsCount > 0,
     },
     {
       id: "analyst",
       name: "Analyst",
-      role: "session timing & market open/close check",
+      role: "Session timing & macroeconomic liquidity verification",
       icon: Shield,
       iconBg: "bg-purple-600/15 border-purple-500/30",
       iconColor: "text-purple-400",
-      statusText: "London / NY Golden Overlap ACTIVE",
-      statusBadge: "96% pass",
-      badgeBg: "bg-purple-500/10 border-purple-500/25",
-      badgeColor: "text-purple-300",
+      statusText: "Session filters & news lockout protocol active",
+      statusBadge: "ARMED",
+      badgeBg: "bg-purple-500/10 border-purple-500/25 text-purple-300",
       inFlight: true,
     },
     {
       id: "sniper",
       name: "Sniper",
-      role: "executes entries with sub-second precision",
+      role: "Sub-second single MT5 terminal order dispatch",
       icon: Zap,
       iconBg: "bg-amber-600/15 border-amber-500/30",
       iconColor: "text-amber-400",
-      statusText: "ready · 0.18s fills",
-      statusBadge: "13 fills",
-      badgeBg: "bg-amber-500/10 border-amber-500/25",
-      badgeColor: "text-amber-300",
-      inFlight: true,
+      statusText: mt5Connected
+        ? "Single terminal connected (<200ms copier sync)"
+        : "Awaiting local MT5 terminal heartbeat",
+      statusBadge: mt5Connected ? "ONLINE" : "STANDBY",
+      badgeBg: mt5Connected ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" : "bg-amber-500/10 border-amber-500/25 text-amber-300",
+      inFlight: mt5Connected,
     },
     {
       id: "risk",
       name: "Risk Guard",
-      role: "dynamic trailing stop & retracement protection",
+      role: "Dynamic trailing stop & aggressive retracement lock",
       icon: Activity,
       iconBg: "bg-pink-600/15 border-pink-500/30",
       iconColor: "text-pink-400",
-      statusText: "+34% trailed to BE",
-      statusBadge: "1 open",
-      badgeBg: "bg-pink-500/10 border-pink-500/25",
-      badgeColor: "text-pink-300",
-      inFlight: false,
+      statusText: openPositionsCount > 0
+        ? `${openPositionsCount} position${openPositionsCount > 1 ? "s" : ""} protected with trailing stops`
+        : "Dynamic 1.0R Breakeven and Retracement lock active",
+      statusBadge: openPositionsCount > 0 ? `${openPositionsCount} PROTECTED` : "ARMED",
+      badgeBg: "bg-pink-500/10 border-pink-500/25 text-pink-300",
+      inFlight: openPositionsCount > 0,
     },
     {
       id: "banker",
       name: "Banker",
-      role: "exits & banks profit systematically",
+      role: "Systematic multi-account profit preservation",
       icon: TrendingUp,
       iconBg: "bg-emerald-600/15 border-emerald-500/30",
       iconColor: "text-emerald-400",
-      statusText: "locking banked profits",
-      statusBadge: "+$701.00",
-      badgeBg: "bg-emerald-500/10 border-emerald-500/25",
-      badgeColor: "text-emerald-300",
+      statusText: dailyPnl != null && dailyPnl !== 0
+        ? `Daily PnL: ${formatPnl(dailyPnl)}`
+        : "Ready to bank partial profits at key SMC targets",
+      statusBadge: dailyPnl != null && dailyPnl !== 0 ? formatPnl(dailyPnl) : "STANDBY",
+      badgeBg: "bg-emerald-500/10 border-emerald-500/25 text-emerald-300",
       inFlight: false,
     },
   ];
@@ -90,14 +92,14 @@ export function GrokAgentPipeline() {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[#1B2535] pb-3">
         <h3 className="text-base font-extrabold text-white tracking-tight flex items-center gap-2">
-          Pipeline
+          Autonomous Pipeline
         </h3>
         <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#121821] text-text-secondary border border-[#243043]">
-          5 agents · <span className="text-emerald-400">3 in flight</span>
+          5-Agent Relay
         </span>
       </div>
 
-      {/* Agents List (Matching Image 2) */}
+      {/* Agents List with Real System States */}
       <div className="space-y-2.5">
         {agents.map((agent) => {
           const Icon = agent.icon;
@@ -128,13 +130,13 @@ export function GrokAgentPipeline() {
                 </div>
               </div>
 
-              {/* Right: Status Tag & Count Badge */}
+              {/* Right: Real Status Tag & Real Count Badge */}
               <div className="flex items-center gap-2.5 shrink-0 pl-2">
                 <span className="hidden sm:inline-block text-xs text-text-secondary font-mono">
                   {agent.statusText}
                 </span>
                 <span
-                  className={`text-xs font-bold font-mono px-2.5 py-1 rounded-md border ${agent.badgeBg} ${agent.badgeColor}`}
+                  className={`text-xs font-bold font-mono px-2.5 py-1 rounded-md border ${agent.badgeBg}`}
                 >
                   {agent.statusBadge}
                 </span>

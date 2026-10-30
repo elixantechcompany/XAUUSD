@@ -28,77 +28,13 @@ const ACTIVE_STATES = new Set([
   "WAITING_FOR_TRIGGER", "SIGNAL_READY", "RISK_CHECK", "ORDER_PENDING", "POSITION_OPEN",
 ]);
 
-// High-probability sample setup to demonstrate measuring & execution tool when offline
-const DEMO_SIGNALS: Signal[] = [
-  {
-    id: "sig_xau_live_01",
-    instrument: "XAUUSD",
-    timeframe: "H1",
-    direction: "BULLISH",
-    state: "SIGNAL_READY",
-    entry: 2688.40,
-    stop_loss: 2679.50,
-    take_profit: 2708.20,
-    trigger_level: 2688.40,
-    fvg_low: 2684.20,
-    fvg_high: 2689.80,
-    sweep_level: 2678.90,
-    sweep_extreme: 2677.80,
-    ref_candle_high: 2688.40,
-    ref_candle_low: 2682.10,
-    rr_ratio: 2.22,
-    quality_grade: "A",
-    status: "new",
-    estimated_risk_usd: 100.0,
-    suggested_lot_size: 0.1,
-    rejection_reason: null,
-    session: "London",
-    strategy_version: "1.0",
-    outcome: null,
-    closed_at: null,
-    r_multiple: null,
-    created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-  {
-    id: "sig_btc_live_02",
-    instrument: "BTCUSD",
-    timeframe: "H1",
-    direction: "BULLISH",
-    state: "WAITING_FOR_TRIGGER",
-    entry: 72450.00,
-    stop_loss: 71800.00,
-    take_profit: 73900.00,
-    trigger_level: 72450.00,
-    fvg_low: 72100.00,
-    fvg_high: 72600.00,
-    sweep_level: 71750.00,
-    sweep_extreme: 71680.00,
-    ref_candle_high: 72450.00,
-    ref_candle_low: 71950.00,
-    rr_ratio: 2.23,
-    quality_grade: "A",
-    status: "new",
-    estimated_risk_usd: 100.0,
-    suggested_lot_size: 0.05,
-    rejection_reason: null,
-    session: "NewYork",
-    strategy_version: "1.0",
-    outcome: null,
-    closed_at: null,
-    r_multiple: null,
-    created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-    updated_at: new Date().toISOString(),
-  },
-];
-
 export default function SignalsPage() {
   const storeSignals = useBotStore((s) => s.signals);
   const [instrument, setInstrument] = useState<Instrument | "ALL">("ALL");
   const [statusFilter, setStatus] = useState<typeof STATUSES[number]>("ALL");
 
-  // Merge store signals with demo signals if store is empty during initial setup
-  const displaySignals = storeSignals.length > 0 ? storeSignals : DEMO_SIGNALS;
+  // Only display real signals from Supabase — never fabricate dummy data
+  const displaySignals = storeSignals;
 
   const filtered = useMemo(() => {
     return displaySignals.filter((s) => {

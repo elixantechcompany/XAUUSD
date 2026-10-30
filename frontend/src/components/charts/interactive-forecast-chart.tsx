@@ -55,23 +55,33 @@ const BTCUSD_CANDLES: Candle[] = [
   { time: "29 20:00", open: 70800, high: 71100, low: 70200, close: 70350 },
 ];
 
+import { useBotStore } from "@/lib/store";
+
 export function InteractiveForecastChart({
   initialInstrument = "XAUUSD",
 }: InteractiveForecastChartProps) {
+  const storeSignals = useBotStore((s) => s.signals);
   const [instrument, setInstrument] = useState<"XAUUSD" | "BTCUSD">(initialInstrument);
+
+  // Check if a real active signal exists for the selected instrument
+  const activeSignal = useMemo(() => {
+    return storeSignals.find(
+      (s) => s.instrument === instrument && !["CLOSED", "EXPIRED", "INVALIDATED", "REJECTED"].includes(s.state)
+    );
+  }, [storeSignals, instrument]);
+
   const [direction, setDirection] = useState<"SHORT" | "LONG">("SHORT");
 
   // Dynamic simulation progress: 0% = at entry, 100% = reached TP
   const [progress, setProgress] = useState<number>(35);
-  const [isSimulating, setIsSimulating] = useState(false);
 
-  // Setup levels based on Image 1 (exact Gold prices)
+  // Setup levels: prefer real active signal if present, otherwise interactive measurement levels
   const isXau = instrument === "XAUUSD";
-  const entryPrice = isXau ? 4054.46 : 72450.0;
-  const initialSl = isXau ? 4068.37 : 73100.0;
-  const targetTp = isXau ? 3988.98 : 70350.0;
-  const fvgHigh = isXau ? 4068.37 : 72650.0;
-  const fvgLow = isXau ? 4048.29 : 71850.0;
+  const entryPrice = activeSignal?.entry ?? (isXau ? 4054.46 : 72450.0);
+  const initialSl = activeSignal?.stop_loss ?? (isXau ? 4068.37 : 73100.0);
+  const targetTp = activeSignal?.take_profit ?? (isXau ? 3988.98 : 70350.0);
+  const fvgHigh = activeSignal?.fvg_high ?? (isXau ? 4068.37 : 72650.0);
+  const fvgLow = activeSignal?.fvg_low ?? (isXau ? 4048.29 : 71850.0);
 
   // Chart range bounds
   const minPrice = isXau ? 3960.0 : 69800.0;
@@ -85,15 +95,11 @@ export function InteractiveForecastChart({
   // Risk & Reward calculations
   const initialRisk = Math.abs(entryPrice - initialSl);
   const totalReward = Math.abs(targetTp - entryPrice);
-  const rrRatio = totalReward / initialRisk;
+  const rrRatio = initialRisk > 0 ? totalReward / initialRisk : 2.0;
 
   // DYNAMIC TRAILING STOP LOSS (Aggressive Retracement Guardian)
-  // When price moves 1.0R into profit -> SL shifts to Breakeven (+1 pip)
-  // When price reaches 1.5R -> SL shifts to lock +0.5R
-  // When price reaches 2.0R -> SL shifts to lock +1.0R
-  // If price retraces aggressively, trailing SL stays tight to lock in bank
   const currentProfitDistance = direction === "SHORT" ? entryPrice - currentPrice : currentPrice - entryPrice;
-  const currentRMultiple = currentProfitDistance / initialRisk;
+  const currentRMultiple = initialRisk > 0 ? currentProfitDistance / initialRisk : 0;
 
   let trailedStopLoss = initialSl;
   let trailPhase = "Initial Risk (1.0% Guard)";
@@ -119,7 +125,7 @@ export function InteractiveForecastChart({
 
   const candles = isXau ? XAUUSD_CANDLES : BTCUSD_CANDLES;
 
-  // Grid levels matching Image 1
+  // Grid levels matching TradingView layout
   const gridTicks = isXau
     ? [4160, 4140, 4120, 4100, 4080, 4054.46, 4020, 4000, 3980, 3960]
     : [73500, 73000, 72500, 72000, 71500, 71000, 70500, 70000];
@@ -135,14 +141,14 @@ export function InteractiveForecastChart({
           <div>
             <div className="flex items-center gap-2">
               <h3 className="font-extrabold text-sm text-white tracking-tight">
-                TradingView SMC Forecasting Tool
+                SMC Forecasting &amp; Measuring Tool
               </h3>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gold/15 text-gold border border-gold/30">
-                Image 1 Replica
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-accent/15 text-accent border border-accent/30 font-mono">
+                {activeSignal ? "Active Live Signal" : "Measuring Tool"}
               </span>
             </div>
             <p className="text-[11px] text-text-secondary">
-              Measure Fair Value Gaps, Risk/Reward forecast zones & dynamic trailing stop shifts.
+              Measure Fair Value Gaps, Risk/Reward forecast zones &amp; dynamic trailing stop shifts.
             </p>
           </div>
         </div>

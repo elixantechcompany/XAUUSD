@@ -79,7 +79,6 @@ export function TopBar() {
           </button>
         </div>
       </header>
-      <OfflineBanner lastHeartbeatTs={heartbeat?.ts} />
     </>
   );
 }
