@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import {
@@ -8,7 +9,6 @@ import {
   Eye,
   EyeOff,
   AlertCircle,
-  CheckCircle2,
   ArrowLeft,
   User,
   Mail,
@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [name, setName]         = useState("");
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
@@ -26,7 +27,6 @@ export default function SignupPage() {
   const [showPw, setShowPw]     = useState(false);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
-  const [done, setDone]         = useState(false);
 
   const pwLengthOk = password.length >= 8;
   const pwHasNumber = /\d/.test(password);
@@ -42,46 +42,40 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
     try {
-      const { error: authError } = await getSupabaseClient().auth.signUp({
-        email,
-        password,
-        options: { data: { full_name: name.trim() } },
+      // 1. Call auto-confirm registration API endpoint
+      const regRes = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          full_name: name.trim(),
+        }),
       });
-      if (authError) throw authError;
-      setDone(true);
+
+      const regData = await regRes.json();
+      if (!regRes.ok) {
+        throw new Error(regData.error || "Failed to create account.");
+      }
+
+      // 2. Automatically log in the user immediately
+      const { error: signInError } = await getSupabaseClient().auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (signInError) {
+        // Fallback: route them to login with a pre-filled state
+        router.replace(`/auth/login?email=${encodeURIComponent(email)}&verified=1`);
+      } else {
+        // Direct entry to Trading Desk Overview
+        router.replace("/overview");
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Signup failed. Please try again.");
     } finally {
       setLoading(false);
     }
-  }
-
-  if (done) {
-    return (
-      <div className="min-h-screen bg-[#070A0F] text-[#F2F5F9] flex flex-col items-center justify-center px-4 relative overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[450px] bg-gradient-to-b from-emerald-500/15 via-gold/10 to-transparent blur-[130px] pointer-events-none -z-10" />
-
-        <div className="w-full max-w-md text-center bg-[#0D131C]/90 backdrop-blur-xl border border-emerald-500/30 rounded-card p-8 sm:p-10 shadow-[0_0_50px_rgba(16,185,129,0.15)] space-y-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl mb-1 shadow-[0_0_25px_rgba(16,185,129,0.2)]">
-            <CheckCircle2 className="w-8 h-8 text-emerald-400" />
-          </div>
-
-          <div>
-            <h1 className="text-2xl font-extrabold text-white tracking-tight">Check your email</h1>
-            <p className="text-text-secondary text-sm mt-2 leading-relaxed">
-              We sent a verification link to <strong className="text-gold">{email}</strong>. Click it to activate your access to the trading desk.
-            </p>
-          </div>
-
-          <Link
-            href="/auth/login"
-            className="inline-flex items-center justify-center gap-2 w-full bg-gradient-to-r from-gold via-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-extrabold py-3.5 rounded-inner text-sm shadow-[0_0_20px_rgba(212,175,55,0.25)] transition-all min-h-[46px]"
-          >
-            Go to Sign In
-          </Link>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -103,7 +97,7 @@ export default function SignupPage() {
 
         <div className="flex items-center gap-2 text-[11px] font-mono text-gold bg-gold/10 border border-gold/30 px-3 py-1 rounded-full">
           <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
-          NEW TRADER REGISTRATION
+          INSTANT ACCESS DESK
         </div>
       </div>
 
@@ -122,7 +116,7 @@ export default function SignupPage() {
               Create Your Trading Account
             </h1>
             <p className="text-text-secondary text-xs sm:text-sm mt-1">
-              Connect to Exness MT5, manage child accounts, and trade SMC signals
+              Instant activation · No confirmation email waiting · Direct MT5 access
             </p>
           </div>
 
@@ -265,10 +259,10 @@ export default function SignupPage() {
               {loading ? (
                 <>
                   <Activity className="w-4 h-4 animate-spin text-black" />
-                  <span>Creating Account...</span>
+                  <span>Activating Account...</span>
                 </>
               ) : (
-                "Create Account & Access Desk"
+                "Create Account & Launch Desk"
               )}
             </button>
           </form>
