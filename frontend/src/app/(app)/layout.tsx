@@ -1,18 +1,67 @@
 "use client";
 
-/**
- * Authenticated app shell layout.
- *
- * Applied to all routes EXCEPT /auth/* because those live outside this
- * route group. The RealtimeProvider wires up Supabase live subscriptions
- * once and keeps them alive for the whole session.
- */
+import { useEffect, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { getSupabaseClient } from "@/lib/supabase/client";
 import { RealtimeProvider } from "@/components/providers/realtime-provider";
 import { MobileNav }        from "@/components/navigation/mobile-nav";
 import { DesktopSidebar }   from "@/components/navigation/desktop-sidebar";
 import { TopBar }           from "@/components/navigation/top-bar";
+import { Zap } from "lucide-react";
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export default function AppLayout({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const [authorized, setAuthorized] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const client = getSupabaseClient();
+
+    // Check existing session in cookies / localStorage
+    client.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        setAuthorized(false);
+        router.replace("/auth/login");
+      } else {
+        setAuthorized(true);
+      }
+    });
+
+    // Listen for auth state changes
+    const {
+      data: { subscription },
+    } = client.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        setAuthorized(false);
+        router.replace("/auth/login");
+      } else {
+        setAuthorized(true);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [router]);
+
+  // Loading state while verifying credentials
+  if (authorized === null) {
+    return (
+      <div className="min-h-screen bg-[#070A0F] text-[#F2F5F9] flex flex-col items-center justify-center gap-3">
+        <div className="w-12 h-12 rounded-xl bg-gold/10 border border-gold/30 flex items-center justify-center shadow-[0_0_20px_rgba(212,175,55,0.2)]">
+          <Zap className="w-6 h-6 text-gold fill-gold/20 animate-pulse" />
+        </div>
+        <div className="text-xs font-mono tracking-widest text-text-secondary uppercase">
+          Verifying Session...
+        </div>
+      </div>
+    );
+  }
+
+  // If unauthorized, return null while router.replace executes
+  if (!authorized) {
+    return null;
+  }
+
   return (
     <RealtimeProvider>
       {/* ── Desktop: sidebar + scrollable content area ── */}

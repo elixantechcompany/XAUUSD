@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type FormEvent, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import {
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 function LoginForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [email, setEmail]             = useState("");
@@ -86,12 +87,6 @@ function LoginForm() {
     setInfoMessage(null);
     setCanAutoVerify(false);
 
-    // Timeout guard so the UI never gets stuck
-    const timer = setTimeout(() => {
-      setLoading(false);
-      setError("Sign-in is taking longer than expected. Please check your credentials and try again.");
-    }, 12000);
-
     try {
       const client = getSupabaseClient();
       const cleanEmail = email.trim().toLowerCase();
@@ -104,9 +99,9 @@ function LoginForm() {
       if (authError) {
         const msg = authError.message.toLowerCase();
 
-        // If email not confirmed, auto-confirm via server API and retry immediately
+        // If email not confirmed, immediately auto-activate and retry
         if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
-          setCanAutoVerify(true);
+          setInfoMessage("Activating account...");
           try {
             const confirmRes = await fetch("/api/auth/confirm-email", {
               method: "POST",
@@ -115,46 +110,41 @@ function LoginForm() {
             });
 
             if (confirmRes.ok) {
-              const { error: retryError } = await client.auth.signInWithPassword({
+              const { data: retryData, error: retryError } = await client.auth.signInWithPassword({
                 email: cleanEmail,
                 password,
               });
 
-              if (!retryError) {
-                clearTimeout(timer);
-                setInfoMessage("Account verified! Entering desk...");
-                window.location.href = "/overview";
+              if (!retryError && retryData?.session) {
+                setInfoMessage("Activated! Entering desk...");
+                router.replace("/overview");
                 return;
               }
             }
           } catch {
-            // Proceed to manual button below
+            // fallback to button below
           }
 
-          clearTimeout(timer);
+          setCanAutoVerify(true);
           setLoading(false);
           setError("Your account requires activation. Click 'Activate & Sign In' below.");
           return;
         }
 
-        clearTimeout(timer);
         setLoading(false);
         setError(authError.message || "Invalid email or password.");
         return;
       }
 
-      if (data?.session || data?.user) {
-        clearTimeout(timer);
-        setInfoMessage("Authenticated. Entering trading desk...");
-        // Crucial: full browser navigation flushes cookie header to middleware
-        window.location.href = "/overview";
+      if (data?.session) {
+        setInfoMessage("Authenticated! Entering desk...");
+        // Fast instant client-side router transition
+        router.replace("/overview");
       } else {
-        clearTimeout(timer);
         setLoading(false);
-        setError("Unable to initialize session. Please try again.");
+        setError("Unable to initialize session. Please check your credentials.");
       }
     } catch (err: unknown) {
-      clearTimeout(timer);
       setLoading(false);
       setError(err instanceof Error ? err.message : "Sign in failed. Check your connection.");
     }

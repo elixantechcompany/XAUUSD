@@ -9,12 +9,10 @@ export const metadata: Metadata = {
   description:
     "Autonomous SMC & Fair Value Gap quantitative trading desk for XAUUSD & BTCUSD with single-terminal multi-account trade copying in <200ms.",
   manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "black-translucent",
-    title: "ELIXAN QUANT",
-  },
   icons: { icon: "/favicon.ico", apple: "/icons/apple-touch-icon.png" },
+  other: {
+    "mobile-web-app-capable": "yes",
+  },
 };
 
 export const viewport: Viewport = {

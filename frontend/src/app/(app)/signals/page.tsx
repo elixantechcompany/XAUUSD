@@ -14,6 +14,7 @@ import { useState, useMemo } from "react";
 import { useBotStore } from "@/lib/store";
 import { SignalCard } from "@/components/signals/signal-card";
 import { MarketSessionDetector } from "@/components/signals/market-session-detector";
+import { InteractiveForecastChart } from "@/components/charts/interactive-forecast-chart";
 import { Sparkles } from "lucide-react";
 import type { Instrument, Signal } from "@/lib/supabase/types";
 import { cn } from "@/lib/utils";
@@ -133,7 +134,10 @@ export default function SignalsPage() {
       {/* ── 1. Global Market Session & Open/Close Detector ── */}
       <MarketSessionDetector instrument={instrument} />
 
-      {/* ── 2. Filters & Symbol Switcher ── */}
+      {/* ── 2. TradingView SMC Forecasting & Measuring Tool (Image 1) ── */}
+      <InteractiveForecastChart initialInstrument={instrument === "BTCUSD" ? "BTCUSD" : "XAUUSD"} />
+
+      {/* ── 3. Filters & Symbol Switcher ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-surface border border-border rounded-card p-3">
         {/* Symbol Switcher */}
         <div className="flex items-center gap-1.5">
