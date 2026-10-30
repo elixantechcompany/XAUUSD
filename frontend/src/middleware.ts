@@ -8,15 +8,23 @@ const PUBLIC_PATHS = [
   "/auth/callback",
 ];
 
+const DEFAULT_SUPABASE_URL = "https://bntqfzopbbeosruzjxbw.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJudHFmem9wYmJlb3NydXpqeGJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMzNTkxMzksImV4cCI6MjEwODkzNTEzOX0.pN_gOstRtLUHF6H24eZH--9qvUjSDSGnsAAxmWg8G7I";
+
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
     request: { headers: request.headers },
   });
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    return response;
+  }
+
+  try {
+    const supabase = createServerClient(url, anonKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -31,24 +39,27 @@ export async function middleware(request: NextRequest) {
           );
         },
       },
+    });
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const { pathname } = request.nextUrl;
+    const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+
+    // Redirect unauthenticated users to login
+    if (!user && !isPublic) {
+      return NextResponse.redirect(new URL("/auth/login", request.url));
     }
-  );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { pathname } = request.nextUrl;
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
-
-  // Redirect unauthenticated users to login
-  if (!user && !isPublic) {
-    return NextResponse.redirect(new URL("/auth/login", request.url));
-  }
-
-  // Redirect authenticated users away from auth pages
-  if (user && isPublic && !pathname.startsWith("/auth/callback")) {
-    return NextResponse.redirect(new URL("/", request.url));
+    // Redirect authenticated users away from auth pages
+    if (user && isPublic && !pathname.startsWith("/auth/callback")) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
+  } catch {
+    // If Supabase session fails, let request pass through
+    return response;
   }
 
   return response;
