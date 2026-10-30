@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   Plus, Server, Shield, Eye, EyeOff,
-  CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
+  CheckCircle2, AlertCircle,
   Loader2, Zap, Power, Trash2, RefreshCw, Copy, Layers, AlertTriangle
 } from "lucide-react";
 

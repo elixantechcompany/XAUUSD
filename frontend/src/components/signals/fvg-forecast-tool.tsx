@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { TrendingUp, TrendingDown, Target, Shield, Gauge, Lock, Compass, ArrowUpRight, ArrowDownRight } from "lucide-react";
-import { cn, formatPrice } from "@/lib/utils";
+import { Target, Shield, Lock, Compass } from "lucide-react";
+import { formatPrice } from "@/lib/utils";
 
 interface FvgForecastProps {
   instrument: string;

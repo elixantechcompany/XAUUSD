@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Check, ChevronDown, ChevronUp, Compass, Zap, CheckCircle2, ShieldCheck, Play, Loader2 } from "lucide-react";
+import { Copy, Check, ChevronDown, ChevronUp, Compass, CheckCircle2, ShieldCheck, Play, Loader2 } from "lucide-react";
 import type { Signal } from "@/lib/supabase/types";
 import { DirectionBadge } from "@/components/ui/direction-badge";
 import { StateProgress } from "@/components/ui/state-progress";
 import { FvgForecastTool } from "@/components/signals/fvg-forecast-tool";
-import { cn, formatPrice, formatPct, timeAgo, STATE_LABELS, TERMINAL_STATES } from "@/lib/utils";
+import { cn, formatPrice, timeAgo, STATE_LABELS, TERMINAL_STATES } from "@/lib/utils";
 
 interface SignalCardProps {
   signal: Signal;

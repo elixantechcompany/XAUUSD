@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Clock, Globe, Zap, AlertCircle } from "lucide-react";
+import { Clock, Globe, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface SessionInfo {

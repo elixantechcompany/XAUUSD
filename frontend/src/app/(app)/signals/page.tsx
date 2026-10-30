@@ -14,8 +14,8 @@ import { useState, useMemo } from "react";
 import { useBotStore } from "@/lib/store";
 import { SignalCard } from "@/components/signals/signal-card";
 import { MarketSessionDetector } from "@/components/signals/market-session-detector";
-import { Zap, Filter, Sparkles, RefreshCw } from "lucide-react";
-import type { Instrument, SignalStatus, Signal } from "@/lib/supabase/types";
+import { Sparkles } from "lucide-react";
+import type { Instrument, Signal } from "@/lib/supabase/types";
 import { cn } from "@/lib/utils";
 
 const INSTRUMENTS: (Instrument | "ALL")[] = ["ALL", "XAUUSD", "BTCUSD"];
@@ -46,9 +46,16 @@ const DEMO_SIGNALS: Signal[] = [
     ref_candle_high: 2688.40,
     ref_candle_low: 2682.10,
     rr_ratio: 2.22,
-    quality_grade: "A+",
+    quality_grade: "A",
     status: "new",
     estimated_risk_usd: 100.0,
+    suggested_lot_size: 0.1,
+    rejection_reason: null,
+    session: "London",
+    strategy_version: "1.0",
+    outcome: null,
+    closed_at: null,
+    r_multiple: null,
     created_at: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -72,6 +79,13 @@ const DEMO_SIGNALS: Signal[] = [
     quality_grade: "A",
     status: "new",
     estimated_risk_usd: 100.0,
+    suggested_lot_size: 0.05,
+    rejection_reason: null,
+    session: "NewYork",
+    strategy_version: "1.0",
+    outcome: null,
+    closed_at: null,
+    r_multiple: null,
     created_at: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
     updated_at: new Date().toISOString(),
   },
@@ -91,7 +105,7 @@ export default function SignalsPage() {
       if (statusFilter === "ALL") return true;
       if (statusFilter === "ACTIVE") return ACTIVE_STATES.has(s.state);
       if (statusFilter === "READY") return s.state === "SIGNAL_READY";
-      if (statusFilter === "CLOSED") return s.state === "CLOSED" || s.state === "TERMINAL_EXPIRED";
+      if (statusFilter === "CLOSED") return s.state === "CLOSED" || s.state === "EXPIRED";
       return true;
     });
   }, [displaySignals, instrument, statusFilter]);
