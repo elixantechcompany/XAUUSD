@@ -2,6 +2,7 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = [
+  "/",
   "/auth/login",
   "/auth/signup",
   "/auth/forgot-password",
@@ -46,16 +47,16 @@ export async function middleware(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     const { pathname } = request.nextUrl;
-    const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+    const isPublic = PUBLIC_PATHS.some((p) => pathname === p || (p !== "/" && pathname.startsWith(p)));
 
-    // Redirect unauthenticated users to login
+    // Redirect unauthenticated users trying to access protected routes to login
     if (!user && !isPublic) {
       return NextResponse.redirect(new URL("/auth/login", request.url));
     }
 
-    // Redirect authenticated users away from auth pages
-    if (user && isPublic && !pathname.startsWith("/auth/callback")) {
-      return NextResponse.redirect(new URL("/", request.url));
+    // Redirect authenticated users away from auth login/signup pages to /overview
+    if (user && pathname.startsWith("/auth") && !pathname.startsWith("/auth/callback")) {
+      return NextResponse.redirect(new URL("/overview", request.url));
     }
   } catch {
     // If Supabase session fails, let request pass through
