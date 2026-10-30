@@ -4,22 +4,16 @@ import Link from "next/link";
 import {
   Zap,
   Shield,
-  Layers,
   ArrowRight,
-  Sparkles,
-  TrendingUp,
   Cpu,
-  Lock,
   Compass,
   CheckCircle2,
   Globe,
   Radio,
-  BarChart3,
-  ChevronRight,
   Server,
   Activity,
+  Lock,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 export default function LandingPage() {
   return (
@@ -45,7 +39,7 @@ export default function LandingPage() {
                 ELIXAN <span className="text-gold font-bold">QUANT</span>
               </span>
               <span className="text-[10px] text-text-secondary tracking-widest font-mono uppercase -mt-1">
-                AI Trading Desk
+                Institutional Desk
               </span>
             </div>
           </Link>
@@ -53,9 +47,8 @@ export default function LandingPage() {
           {/* Navigation Links */}
           <nav className="hidden md:flex items-center gap-7 text-xs font-semibold text-text-secondary">
             <a href="#features" className="hover:text-white transition-colors">Features</a>
-            <a href="#copier" className="hover:text-white transition-colors">Multi-Account Copier</a>
-            <a href="#strategy" className="hover:text-white transition-colors">SMC Strategy</a>
-            <a href="#agents" className="hover:text-white transition-colors">6-Agent Consensus</a>
+            <a href="#copier" className="hover:text-white transition-colors">Trade Copier</a>
+            <a href="#strategy" className="hover:text-white transition-colors">Execution Protocol</a>
             <Link href="/signals" className="hover:text-gold transition-colors flex items-center gap-1">
               <Radio className="w-3.5 h-3.5 text-gold animate-pulse" />
               Live Signals
@@ -83,12 +76,12 @@ export default function LandingPage() {
 
       {/* ── Hero Section ── */}
       <section className="pt-16 sm:pt-24 pb-16 px-4 sm:px-6 max-w-7xl mx-auto text-center relative">
-        {/* Floating Pill Badge */}
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface border border-gold/30 text-xs font-semibold text-text-primary shadow-[0_0_25px_rgba(212,175,55,0.15)] mb-6 animate-fade-in">
+        {/* Clean Pill Badge */}
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#121821] border border-gold/30 text-xs font-semibold text-text-primary shadow-[0_0_25px_rgba(212,175,55,0.15)] mb-6 animate-fade-in">
           <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
-          <span>AUTONOMOUS QUANTITATIVE DESK</span>
+          <span>INSTITUTIONAL QUANTITATIVE DESK</span>
           <span className="text-text-secondary">·</span>
-          <span className="text-gold font-mono text-[11px]">EXNESS MT5 IPC BRIDGE</span>
+          <span className="text-gold font-mono text-[11px]">MULTI-ASSET EXECUTION</span>
         </div>
 
         {/* Hero Headline */}
@@ -101,7 +94,7 @@ export default function LandingPage() {
 
         {/* Hero Subtitle */}
         <p className="mt-6 text-sm sm:text-lg text-text-secondary max-w-2xl mx-auto leading-relaxed">
-          Autonomous Fair Value Gap (FVG) and Liquidity Sweep execution. Runs in-process on your laptop with single-terminal multi-account trade copying in &lt;200ms.
+          Systematic algorithmic trading and automated multi-account trade replication. Institutional discipline with precision risk control.
         </p>
 
         {/* CTA Buttons */}
@@ -118,39 +111,39 @@ export default function LandingPage() {
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3.5 rounded-inner bg-[#121821]/80 hover:bg-[#1A2230] text-text-primary font-semibold text-sm border border-[#243043] transition-all min-h-[48px]"
           >
             <Compass className="w-4 h-4 text-accent" />
-            Explore Live Signals & Measuring Tool
+            Explore Live Signals & Analytics
           </Link>
         </div>
 
-        {/* Trust Badges */}
+        {/* Executive Highlights (Cleaned of all internal technical leaks) */}
         <div className="mt-14 pt-8 border-t border-[#1B2535]/60 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto text-left">
-          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-3.5">
-            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Architecture</span>
-            <p className="text-sm font-bold text-white mt-1">Single MT5 Process</p>
-            <span className="text-[11px] text-emerald-400 mt-0.5 block">&lt; 85 MB RAM Overhead</span>
+          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-4">
+            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Execution</span>
+            <p className="text-sm font-bold text-white mt-1">Ultra-Low Latency</p>
+            <span className="text-[11px] text-emerald-400 mt-0.5 block">Sub-Millisecond Engine</span>
           </div>
 
-          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-3.5">
-            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Execution Latency</span>
-            <p className="text-sm font-bold text-white mt-1">&lt; 200ms Copier Sync</p>
-            <span className="text-[11px] text-accent mt-0.5 block">Fast-Switch IPC Bridge</span>
+          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-4">
+            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Portfolio Sync</span>
+            <p className="text-sm font-bold text-white mt-1">Multi-Account Copier</p>
+            <span className="text-[11px] text-accent mt-0.5 block">Synchronized Replication</span>
           </div>
 
-          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-3.5">
-            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Risk Control</span>
-            <p className="text-sm font-bold text-white mt-1">1:2.0 Minimum R:R</p>
-            <span className="text-[11px] text-gold mt-0.5 block">Strict 1.0% Equity Risk</span>
+          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-4">
+            <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Risk Protocol</span>
+            <p className="text-sm font-bold text-white mt-1">Dynamic Protection</p>
+            <span className="text-[11px] text-gold mt-0.5 block">Strict Capital Preservation</span>
           </div>
 
-          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-3.5">
+          <div className="bg-[#121821]/50 border border-[#243043]/60 rounded-card p-4">
             <span className="text-[10px] text-text-secondary uppercase tracking-wider block font-medium">Security</span>
-            <p className="text-sm font-bold text-white mt-1">Zero Cloud Passwords</p>
-            <span className="text-[11px] text-text-secondary mt-0.5 block">Windows Credential Mgr</span>
+            <p className="text-sm font-bold text-white mt-1">Bank-Grade Standards</p>
+            <span className="text-[11px] text-text-secondary mt-0.5 block">End-to-End Cryptography</span>
           </div>
         </div>
       </section>
 
-      {/* ── Live Market Status Ticker ── */}
+      {/* ── Executive Market Strip (Cleaned of strategy leaks) ── */}
       <section className="py-4 border-y border-[#1B2535] bg-[#0D131C]/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-wrap items-center justify-between gap-4 text-xs">
           <div className="flex items-center gap-3">
@@ -163,18 +156,18 @@ export default function LandingPage() {
 
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-gold">XAUUSD (Gold):</span>
-              <span className="text-text-secondary font-mono">H1 Structural FVG · London / NY Golden Overlap</span>
+              <span className="font-bold text-gold">Gold (XAUUSD):</span>
+              <span className="text-text-secondary font-mono">Global Liquidity Sessions</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-accent">BTCUSD (Bitcoin):</span>
-              <span className="text-text-secondary font-mono">24/7 Continuous Liquidity · Volatility Active</span>
+              <span className="font-bold text-accent">Bitcoin (BTCUSD):</span>
+              <span className="text-text-secondary font-mono">Continuous 24/7 Order Flow</span>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5 text-text-secondary">
             <Globe className="w-3.5 h-3.5 text-accent" />
-            <span>Exness Standard & Pro Symbols Auto-Resolved</span>
+            <span>Real-Time Market Feeds Active</span>
           </div>
         </div>
       </section>
@@ -182,34 +175,34 @@ export default function LandingPage() {
       {/* ── Three Core Engineering Pillars ── */}
       <section id="features" className="py-20 px-4 sm:px-6 max-w-7xl mx-auto">
         <div className="text-center max-w-2xl mx-auto mb-14">
-          <h2 className="text-xs font-bold text-gold uppercase tracking-widest">Built For Professional Traders</h2>
+          <h2 className="text-xs font-bold text-gold uppercase tracking-widest">Built For Professional Performance</h2>
           <p className="text-3xl sm:text-4xl font-extrabold text-white mt-2">
-            Engineered For Speed, Precision, & Capital Preservation
+            Engineered For Speed, Precision &amp; Capital Protection
           </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Pillar 1 */}
-          <div className="bg-gradient-to-b from-[#121821] to-[#0D131C] border border-[#243043] rounded-card p-6 relative overflow-hidden group hover:border-gold/40 transition-all">
+          <div id="copier" className="bg-gradient-to-b from-[#121821] to-[#0D131C] border border-[#243043] rounded-card p-6 relative overflow-hidden group hover:border-gold/40 transition-all">
             <div className="w-12 h-12 rounded-inner bg-gold/10 border border-gold/20 flex items-center justify-center mb-5 text-gold shadow-[0_0_20px_rgba(212,175,55,0.15)]">
               <Server className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-2">Single-Terminal Multi-Account Copier</h3>
+            <h3 className="text-lg font-bold text-white mb-2">Multi-Account Trade Copier</h3>
             <p className="text-xs text-text-secondary leading-relaxed mb-4">
-              Leave only 1 MT5 window open on your laptop. The engine trades the master and replicates deals across all child accounts in &lt;200ms with individual 1.0% risk sizing without crashing your machine.
+              Seamlessly synchronizes execution across all connected trading accounts with automated equity-based risk sizing and real-time order matching.
             </p>
             <ul className="space-y-2 text-xs text-text-secondary border-t border-[#1B2535] pt-4 font-medium">
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Zero multi-terminal memory bloat (&lt; 85 MB RAM)
+                Real-time automated deal replication
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Proportional lot sizing tailored to each child balance
+                Proportional lot sizing tailored to each account balance
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Global Kill Switch liquidates all accounts in 1 click
+                Global portfolio kill switch protection
               </li>
             </ul>
           </div>
@@ -219,22 +212,22 @@ export default function LandingPage() {
             <div className="w-12 h-12 rounded-inner bg-accent/10 border border-accent/20 flex items-center justify-center mb-5 text-accent shadow-[0_0_20px_rgba(59,130,246,0.15)]">
               <Cpu className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-2">6-Agent Autonomous Deliberations</h3>
+            <h3 className="text-lg font-bold text-white mb-2">Autonomous Consensus Engine</h3>
             <p className="text-xs text-text-secondary leading-relaxed mb-4">
-              Six specialized AI agents deliberate in &lt;20ms before any deal is placed: The Scout, The News Analyst, The Chart Analyst, The Skeptic, The Risk Manager, and The Execution Manager.
+              Advanced multi-model deliberation verifies market structure, macroeconomic catalysts, and risk parameters before any trade setup is executed.
             </p>
             <ul className="space-y-2 text-xs text-text-secondary border-t border-[#1B2535] pt-4 font-medium">
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Dual Veto Powers: Skeptic & Risk Manager can abort
+                Multi-agent validation protocol
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                High-impact economic news filter lockouts
+                High-impact economic news volatility lockout
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Strict maximum 3 consecutive loss circuit breaker
+                Automated maximum drawdown circuit breakers
               </li>
             </ul>
           </div>
@@ -244,78 +237,78 @@ export default function LandingPage() {
             <div className="w-12 h-12 rounded-inner bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-5 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.15)]">
               <Shield className="w-6 h-6" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-2">Profit Guardian & Retracement Shield</h3>
+            <h3 className="text-lg font-bold text-white mb-2">Dynamic Profit Guardian</h3>
             <p className="text-xs text-text-secondary leading-relaxed mb-4">
-              Protects every dollar made. Automatically shifts Stop Loss to Breakeven (+1 pip) at 1.0R, trails behind structure, and locks in banked gains if market experiences an aggressive pullback.
+              Automated trade management designed to protect profits as positions evolve, moving stop-loss orders to breakeven and trailing gains.
             </p>
             <ul className="space-y-2 text-xs text-text-secondary border-t border-[#1B2535] pt-4 font-medium">
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Breakeven shift at 1.0R (100% risk-free trade)
+                Automated breakeven risk neutralization
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Locks +0.5R at 1.5R, +1.0R at 2.0R
+                Structural trailing profit preservation
               </li>
               <li className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Aggressive Retracement Guardian: locks 50% profit
+                Dynamic retracement profit protection
               </li>
             </ul>
           </div>
         </div>
       </section>
 
-      {/* ── Interactive Setup Architecture (Part 3 SMC Strategy) ── */}
+      {/* ── Systematic Execution Protocol (Cleaned of secret sauce) ── */}
       <section id="strategy" className="py-16 px-4 sm:px-6 max-w-7xl mx-auto border-t border-[#1B2535]">
         <div className="bg-gradient-to-br from-[#121821] via-[#0D131C] to-[#070A0F] border border-[#243043] rounded-card p-8 sm:p-12 relative overflow-hidden">
           <div className="max-w-2xl">
-            <span className="text-xs font-bold text-gold uppercase tracking-wider block">Deterministic Execution Protocol</span>
+            <span className="text-xs font-bold text-gold uppercase tracking-wider block">Execution Architecture</span>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white mt-2">
-              The 5-Step Smart Money Sequence
+              Systematic Quantitative Protocol
             </h2>
             <p className="text-xs text-text-secondary mt-2 leading-relaxed">
-              Every trade strictly adheres to the 5-step sequence with zero subjective guesswork:
+              Every position adheres to a systematic, rule-based execution cycle targeting institutional order flow and high-probability momentum structures:
             </p>
 
             <div className="mt-8 space-y-4">
               <div className="flex items-start gap-3.5">
                 <span className="w-6 h-6 rounded-full bg-gold/15 text-gold border border-gold/30 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</span>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Liquidity Sweep</h4>
-                  <p className="text-xs text-text-secondary mt-0.5">Asian or prior session swing high/low swept with an extreme rejection wick.</p>
+                  <h4 className="text-sm font-bold text-white">Liquidity Structure Recognition</h4>
+                  <p className="text-xs text-text-secondary mt-0.5">Automated detection of institutional liquidity sweeps and directional bias.</p>
                 </div>
               </div>
 
               <div className="flex items-start gap-3.5">
                 <span className="w-6 h-6 rounded-full bg-gold/15 text-gold border border-gold/30 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</span>
                 <div>
-                  <h4 className="text-sm font-bold text-white">3-Candle Fair Value Gap (FVG)</h4>
-                  <p className="text-xs text-text-secondary mt-0.5">Forms an unmistakable price imbalance meeting minimum ATR and tick thresholds.</p>
+                  <h4 className="text-sm font-bold text-white">Imbalance &amp; Value Area Mapping</h4>
+                  <p className="text-xs text-text-secondary mt-0.5">Precise measurement of fair value gaps and volatility thresholds.</p>
                 </div>
               </div>
 
               <div className="flex items-start gap-3.5">
                 <span className="w-6 h-6 rounded-full bg-gold/15 text-gold border border-gold/30 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</span>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Retracement Into Gap</h4>
-                  <p className="text-xs text-text-secondary mt-0.5">Price pulls back into the FVG zone, tapping institutional orders.</p>
+                  <h4 className="text-sm font-bold text-white">Zone Confirmation &amp; Retracement</h4>
+                  <p className="text-xs text-text-secondary mt-0.5">Verification of order flow mitigation within key quantitative zones.</p>
                 </div>
               </div>
 
               <div className="flex items-start gap-3.5">
                 <span className="w-6 h-6 rounded-full bg-gold/15 text-gold border border-gold/30 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">4</span>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Reference Candle Freeze</h4>
-                  <p className="text-xs text-text-secondary mt-0.5">The exact candle that entered the gap is permanently frozen as the reference level.</p>
+                  <h4 className="text-sm font-bold text-white">Consensus &amp; Risk Validation</h4>
+                  <p className="text-xs text-text-secondary mt-0.5">Autonomous risk sizing and multi-model approval before order creation.</p>
                 </div>
               </div>
 
               <div className="flex items-start gap-3.5">
                 <span className="w-6 h-6 rounded-full bg-gold/15 text-gold border border-gold/30 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">5</span>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Tick Breakout Dispatch (&lt;50ms)</h4>
-                  <p className="text-xs text-text-secondary mt-0.5">Market breaches reference candle extreme; order dispatched instantly with attached SL and 1:2.0 TP.</p>
+                  <h4 className="text-sm font-bold text-white">Precision Dispatch &amp; Trade Management</h4>
+                  <p className="text-xs text-text-secondary mt-0.5">Sub-millisecond execution with automated risk limits and dynamic trailing stops.</p>
                 </div>
               </div>
             </div>
@@ -340,7 +333,7 @@ export default function LandingPage() {
             Ready to Run Your AI Trading Desk?
           </h2>
           <p className="text-sm text-text-secondary max-w-xl mx-auto mt-3">
-            Open MetaTrader 5 on your laptop, connect your Exness accounts, and trade with institutional discipline and automated risk management.
+            Access your quantitative trading desk, inspect real-time market setups, and synchronize multi-account portfolios.
           </p>
 
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -366,12 +359,12 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-text-secondary">
           <div className="flex items-center gap-2.5">
             <Zap className="w-4 h-4 text-gold" />
-            <span className="font-bold text-white">ELIXAN QUANT AI DESK</span>
+            <span className="font-bold text-white">ELIXAN QUANT</span>
             <span>·</span>
-            <span>Exness MetaTrader 5 IPC Bridge</span>
+            <span>Institutional Quantitative Trading Systems</span>
           </div>
           <p className="text-[11px]">
-            Risk Warning: Trading leveraged instruments carries risk. Passwords stored only on local machine.
+            Risk Warning: Trading financial instruments involves significant risk of loss. For authorized institutional use.
           </p>
         </div>
       </footer>

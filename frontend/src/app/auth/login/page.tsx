@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, type FormEvent, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import {
@@ -12,14 +12,12 @@ import {
   ArrowLeft,
   Lock,
   Mail,
-  ShieldCheck,
   Activity,
   CheckCircle2,
   RefreshCw,
 } from "lucide-react";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [email, setEmail]             = useState("");
@@ -38,7 +36,7 @@ function LoginForm() {
       setEmail(qEmail);
     }
     if (qVerified === "1") {
-      setInfoMessage("Account registered successfully! Enter your password to enter the trading desk.");
+      setInfoMessage("Account created. Please enter your password to sign in.");
     }
   }, [searchParams]);
 
@@ -50,22 +48,27 @@ function LoginForm() {
       const res = await fetch("/api/auth/confirm-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || "Failed to auto-verify email.");
+        throw new Error(data.error || "Failed to verify account.");
       }
 
-      setInfoMessage("Email confirmed successfully! Signing in...");
+      setInfoMessage("Account verified! Signing in...");
       setCanAutoVerify(false);
 
       if (password) {
-        // Attempt sign-in immediately with provided password
-        const { error: authError } = await getSupabaseClient()
-          .auth.signInWithPassword({ email: email.trim(), password });
+        const client = getSupabaseClient();
+        const { error: authError } = await client.auth.signInWithPassword({
+          email: email.trim().toLowerCase(),
+          password,
+        });
         if (authError) throw authError;
-        router.replace("/overview");
+
+        // Force browser page load to ensure cookies are sent
+        window.location.href = "/overview";
+        return;
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Verification failed. Check your email address.");
@@ -76,48 +79,84 @@ function LoginForm() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (loading) return;
+
     setLoading(true);
     setError(null);
     setInfoMessage(null);
     setCanAutoVerify(false);
 
+    // Timeout guard so the UI never gets stuck
+    const timer = setTimeout(() => {
+      setLoading(false);
+      setError("Sign-in is taking longer than expected. Please check your credentials and try again.");
+    }, 12000);
+
     try {
-      const { error: authError } = await getSupabaseClient()
-        .auth.signInWithPassword({ email: email.trim(), password });
+      const client = getSupabaseClient();
+      const cleanEmail = email.trim().toLowerCase();
+
+      const { data, error: authError } = await client.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
 
       if (authError) {
-        // If Supabase reports email is not confirmed, auto-confirm it via Admin API
         const msg = authError.message.toLowerCase();
+
+        // If email not confirmed, auto-confirm via server API and retry immediately
         if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
           setCanAutoVerify(true);
-          // Try to automatically verify in the background and re-login
           try {
             const confirmRes = await fetch("/api/auth/confirm-email", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email: email.trim() }),
+              body: JSON.stringify({ email: cleanEmail }),
             });
+
             if (confirmRes.ok) {
-              const { error: retryError } = await getSupabaseClient()
-                .auth.signInWithPassword({ email: email.trim(), password });
+              const { error: retryError } = await client.auth.signInWithPassword({
+                email: cleanEmail,
+                password,
+              });
+
               if (!retryError) {
-                router.replace("/overview");
+                clearTimeout(timer);
+                setInfoMessage("Account verified! Entering desk...");
+                window.location.href = "/overview";
                 return;
               }
             }
           } catch {
-            // If background verify failed, show manual button below
+            // Proceed to manual button below
           }
-          throw new Error("Email not confirmed yet. Click 'Verify & Sign In' below to activate your account instantly.");
+
+          clearTimeout(timer);
+          setLoading(false);
+          setError("Your account requires activation. Click 'Activate & Sign In' below.");
+          return;
         }
-        throw authError;
+
+        clearTimeout(timer);
+        setLoading(false);
+        setError(authError.message || "Invalid email or password.");
+        return;
       }
 
-      router.replace("/overview");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Sign in failed. Check your email and password.");
-    } finally {
+      if (data?.session || data?.user) {
+        clearTimeout(timer);
+        setInfoMessage("Authenticated. Entering trading desk...");
+        // Crucial: full browser navigation flushes cookie header to middleware
+        window.location.href = "/overview";
+      } else {
+        clearTimeout(timer);
+        setLoading(false);
+        setError("Unable to initialize session. Please try again.");
+      }
+    } catch (err: unknown) {
+      clearTimeout(timer);
       setLoading(false);
+      setError(err instanceof Error ? err.message : "Sign in failed. Check your connection.");
     }
   }
 
@@ -171,7 +210,7 @@ function LoginForm() {
                 ) : (
                   <>
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Instant Verify &amp; Sign In</span>
+                    <span>Activate &amp; Sign In</span>
                   </>
                 )}
               </button>
@@ -250,7 +289,7 @@ function LoginForm() {
             {loading ? (
               <>
                 <Activity className="w-4 h-4 animate-spin text-black" />
-                <span>Authenticating...</span>
+                <span>Signing In...</span>
               </>
             ) : (
               "Sign In to Trading Desk"
@@ -265,12 +304,6 @@ function LoginForm() {
             Create an account
           </Link>
         </div>
-      </div>
-
-      {/* Security Disclaimers */}
-      <div className="mt-6 flex items-center justify-center gap-3 text-center text-[11px] text-text-secondary/70">
-        <ShieldCheck className="w-3.5 h-3.5 text-gold shrink-0" />
-        <span>MT5 credentials stored exclusively on local laptop · Zero cloud storage</span>
       </div>
     </div>
   );
@@ -293,11 +326,6 @@ export default function LoginPage() {
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to Home
         </Link>
-
-        <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-3 py-1 rounded-full">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          IPC BRIDGE ONLINE
-        </div>
       </div>
 
       <Suspense fallback={<div className="text-center text-text-secondary text-sm">Loading...</div>}>
@@ -306,7 +334,7 @@ export default function LoginPage() {
 
       {/* Bottom Footer */}
       <div className="text-center text-[11px] text-text-secondary/60">
-        &copy; {new Date().getFullYear()} Elixan Quant Systems · Autonomous SMC Trading Desk
+        &copy; {new Date().getFullYear()} Elixan Quant Systems
       </div>
     </div>
   );

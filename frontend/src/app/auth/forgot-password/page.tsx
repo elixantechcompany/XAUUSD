@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   ArrowLeft,
   Mail,
-  ShieldCheck,
   Activity,
 } from "lucide-react";
 
@@ -25,7 +24,7 @@ export default function ForgotPasswordPage() {
     setError(null);
     try {
       const { error: authError } = await getSupabaseClient().auth.resetPasswordForEmail(
-        email,
+        email.trim().toLowerCase(),
         { redirectTo: `${window.location.origin}/auth/callback?next=/auth/reset-password` }
       );
       if (authError) throw authError;
@@ -53,10 +52,6 @@ export default function ForgotPasswordPage() {
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to Sign In
         </Link>
-
-        <div className="flex items-center gap-2 text-[11px] font-mono text-text-secondary bg-[#121821]/80 border border-[#243043] px-3 py-1 rounded-full">
-          ACCOUNT RECOVERY
-        </div>
       </div>
 
       {/* Main Reset Card */}
@@ -75,8 +70,8 @@ export default function ForgotPasswordPage() {
             </h1>
             <p className="text-text-secondary text-xs sm:text-sm mt-1">
               {done
-                ? "We dispatched a secure recovery link to your email"
-                : "Enter your registered email to receive a recovery link"}
+                ? "We sent a password reset link to your email"
+                : "Enter your registered email to receive a password reset link"}
             </p>
           </div>
 
@@ -120,7 +115,7 @@ export default function ForgotPasswordPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     autoComplete="email"
-                    placeholder="trader@elixanquant.com"
+                    placeholder="trader@example.com"
                     className="w-full bg-[#121821] border border-[#243043] rounded-inner pl-10 pr-4 py-3 text-sm text-text-primary placeholder:text-text-secondary/50 focus:outline-none focus:border-gold/60 focus:ring-1 focus:ring-gold/30 transition-all font-sans"
                   />
                 </div>
@@ -137,7 +132,7 @@ export default function ForgotPasswordPage() {
                     <span>Sending Link...</span>
                   </>
                 ) : (
-                  "Send Recovery Link"
+                  "Send Reset Link"
                 )}
               </button>
 
@@ -153,17 +148,11 @@ export default function ForgotPasswordPage() {
             </form>
           )}
         </div>
-
-        {/* Security Disclaimers */}
-        <div className="mt-6 flex items-center justify-center gap-3 text-center text-[11px] text-text-secondary/70">
-          <ShieldCheck className="w-3.5 h-3.5 text-gold shrink-0" />
-          <span>Secure cryptographic token verification via Supabase Auth</span>
-        </div>
       </div>
 
       {/* Bottom Footer */}
       <div className="text-center text-[11px] text-text-secondary/60">
-        &copy; {new Date().getFullYear()} Elixan Quant Systems · Autonomous SMC Trading Desk
+        &copy; {new Date().getFullYear()} Elixan Quant Systems
       </div>
     </div>
   );

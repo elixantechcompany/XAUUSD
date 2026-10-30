@@ -17,6 +17,13 @@ export async function middleware(request: NextRequest) {
     request: { headers: request.headers },
   });
 
+  const { pathname } = request.nextUrl;
+
+  // Never intercept internal API routes
+  if (pathname.startsWith("/api")) {
+    return response;
+  }
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
@@ -46,7 +53,6 @@ export async function middleware(request: NextRequest) {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const { pathname } = request.nextUrl;
     const isPublic = PUBLIC_PATHS.some((p) => pathname === p || (p !== "/" && pathname.startsWith(p)));
 
     // Redirect unauthenticated users trying to access protected routes to login
@@ -68,6 +74,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.json|icons).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.json|icons|api).*)",
   ],
 };
