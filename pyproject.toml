@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "xauusd-fvg-trader"
+version = "0.1.0"
+description = "H1 Fair Value Gap trading system for XAUUSD and BTCUSD"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "unit: fast isolated unit tests",
+    "integration: tests requiring external services",
+    "slow: long-running tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/desktop/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 60

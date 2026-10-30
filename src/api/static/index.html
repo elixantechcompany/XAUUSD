@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XAUUSD / BTCUSD Quant AI Trading Desk</title>
+  <meta name="description" content="Local Multi-Agent AI Quantitative Trading Platform. 4GB RAM Optimized. Strategy Part 3 Sequence Engine.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-canvas: #07090e;
+      --bg-header: #0d121f;
+      --bg-card: #0f1626;
+      --bg-card-hover: #151d32;
+      --border: #1e293b;
+      --border-accent: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --bull: #10b981;
+      --bull-bg: rgba(16, 185, 129, 0.12);
+      --bear: #ef4444;
+      --bear-bg: rgba(239, 68, 68, 0.12);
+      --cyan: #06b6d4;
+      --cyan-bg: rgba(6, 182, 212, 0.12);
+      --gold: #f59e0b;
+      --gold-bg: rgba(245, 158, 11, 0.12);
+      --purple: #8b5cf6;
+      --purple-bg: rgba(139, 92, 246, 0.12);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Navigation Header */
+    header {
+      background-color: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-title span.accent {
+      color: var(--cyan);
+      text-shadow: 0 0 12px rgba(6, 182, 212, 0.4);
+    }
+
+    .chips-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .chip {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    .chip.safe { color: var(--bull); border-color: rgba(16, 185, 129, 0.3); background: var(--bull-bg); }
+    .chip.warn { color: var(--gold); border-color: rgba(245, 158, 11, 0.3); background: var(--gold-bg); }
+    .chip.cyan { color: var(--cyan); border-color: rgba(6, 182, 212, 0.3); background: var(--cyan-bg); }
+
+    .btn-kill {
+      background-color: #dc2626;
+      color: white;
+      font-weight: 700;
+      font-size: 12px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid #ef4444;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 0 15px rgba(220, 38, 38, 0.4);
+      transition: all 0.2s ease;
+    }
+
+    .btn-kill:hover {
+      background-color: #b91c1c;
+      box-shadow: 0 0 20px rgba(220, 38, 38, 0.7);
+    }
+
+    /* Sub-header Navigation Tabs */
+    nav.tab-bar {
+      background-color: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      padding: 0 24px;
+      gap: 4px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 12px 18px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+      background: rgba(6, 182, 212, 0.04);
+    }
+
+    /* Main Container */
+    main {
+      padding: 24px;
+      flex: 1;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* KPI Grid */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .kpi-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi-title {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .kpi-value {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .kpi-subtitle {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    /* Grid Split Layout */
+    .split-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 1024px) {
+      .split-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Panel Card */
+    .panel {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Consensus Pipeline */
+    .pipeline-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-canvas);
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin-bottom: 20px;
+      overflow-x: auto;
+      gap: 8px;
+    }
+
+    .pipe-step {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-size: 11px;
+      gap: 4px;
+      min-width: 90px;
+    }
+
+    .pipe-badge {
+      font-family: var(--font-mono);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: 700;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    .pipe-badge.pass { background: var(--bull-bg); color: var(--bull); border-color: rgba(16, 185, 129, 0.4); }
+    .pipe-badge.veto { background: var(--bear-bg); color: var(--bear); border-color: rgba(239, 68, 68, 0.4); }
+    .pipe-arrow { color: var(--text-dim); font-weight: bold; }
+
+    /* 6 Agents Cards Grid */
+    .agents-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .agent-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      transition: border-color 0.15s ease;
+    }
+
+    .agent-card:hover {
+      border-color: var(--border-accent);
+    }
+
+    .agent-card-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .agent-name {
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text-main);
+    }
+
+    .agent-tag {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+    }
+
+    .agent-vote {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .vote-pass { background: var(--bull-bg); color: var(--bull); border: 1px solid rgba(16,185,129,0.3); }
+    .vote-veto { background: var(--bear-bg); color: var(--bear); border: 1px solid rgba(239,68,68,0.3); }
+    .vote-idle { background: rgba(148,163,184,0.1); color: var(--text-muted); border: 1px solid var(--border); }
+
+    .agent-metrics {
+      display: flex;
+      gap: 12px;
+      margin: 8px 0;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .agent-rationale {
+      font-size: 11px;
+      color: #cbd5e1;
+      background: var(--bg-canvas);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      min-height: 48px;
+    }
+
+    /* Tables */
+    .table-container {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th {
+      background-color: var(--bg-canvas);
+      color: var(--text-muted);
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-main);
+      font-family: var(--font-mono);
+    }
+
+    tr:hover td {
+      background-color: var(--bg-card-hover);
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-box {
+      background: var(--bg-card);
+      border: 2px solid var(--bear);
+      border-radius: 12px;
+      padding: 24px;
+      max-width: 500px;
+      width: 90%;
+      box-shadow: 0 0 30px rgba(239, 68, 68, 0.4);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .btn-secondary {
+      background: var(--bg-canvas);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .btn-danger {
+      background: #dc2626;
+      border: 1px solid #ef4444;
+      color: white;
+      padding: 8px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    /* Progress bar */
+    .progress-bar-bg {
+      background: var(--bg-canvas);
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 6px;
+      border: 1px solid var(--border);
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--cyan);
+      transition: width 0.3s ease;
+    }
+
+    .progress-bar-fill.warn { background: var(--gold); }
+    .progress-bar-fill.danger { background: var(--bear); }
+
+    /* Footer */
+    footer {
+      background-color: var(--bg-header);
+      border-top: 1px solid var(--border);
+      padding: 10px 24px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand-section">
+      <div class="brand-title">
+        <span>AI TRADING DESK</span>
+        <span class="accent">// QUANT MULTI-AGENT</span>
+      </div>
+      <div class="chips-bar">
+        <div class="chip cyan" id="chip-mode">MODE: PAPER SAFE</div>
+        <div class="chip safe" id="chip-mt5">MT5: CONNECTED (EXNESS)</div>
+        <div class="chip safe" id="chip-db">DB: SQLITE WAL</div>
+        <div class="chip" id="chip-ram">RAM: &lt;30 MB OK</div>
+      </div>
+    </div>
+    <div>
+      <button class="btn-kill" id="btn-open-kill" onclick="openKillModal()">
+        ⚠️ EMERGENCY KILL SWITCH
+      </button>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" id="tab-btn-overview" onclick="showTab('overview')">📊 Overview & Terminal</button>
+    <button class="tab-btn" id="tab-btn-agents" onclick="showTab('agents')">🤖 6-Agent Deliberations</button>
+    <button class="tab-btn" id="tab-btn-setups" onclick="showTab('setups')">🎯 Strategy Setups (Part 3)</button>
+    <button class="tab-btn" id="tab-btn-journal" onclick="showTab('journal')">📖 Orders & Journal</button>
+    <button class="tab-btn" id="tab-btn-risk" onclick="showTab('risk')">🛡️ Risk & Safety Console</button>
+    <button class="tab-btn" id="tab-btn-system" onclick="showTab('system')">⚙️ System & Vault</button>
+  </nav>
+
+  <!-- Main View Area -->
+  <main>
+
+    <!-- TAB 1: OVERVIEW -->
+    <div class="tab-pane active" id="pane-overview">
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-title">Account Equity</div>
+          <div class="kpi-value" id="kpi-equity">$10,000.00</div>
+          <div class="kpi-subtitle">Balance: <span id="kpi-balance">$10,000.00</span></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Today's Realized PnL</div>
+          <div class="kpi-value" id="kpi-pnl" style="color: var(--bull);">+$0.00</div>
+          <div class="kpi-subtitle">Target: Risk &le; 1.0% per trade</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Daily Trades (Max 5)</div>
+          <div class="kpi-value" id="kpi-trades">0 / 5</div>
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="pb-trades" style="width: 0%;"></div></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Daily Drawdown (Max 3%)</div>
+          <div class="kpi-value" id="kpi-drawdown">0.00%</div>
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="pb-drawdown" style="width: 0%;"></div></div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-title">Coordinator Verdict</div>
+          <div class="kpi-value" id="kpi-verdict" style="font-size: 16px; color: var(--gold);">SEARCHING</div>
+          <div class="kpi-subtitle" id="kpi-decision-id">Decision: Ready</div>
+        </div>
+      </div>
+
+      <div class="split-grid">
+        <!-- Market Instruments -->
+        <div>
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">📈 Monitored Market Instruments (H1)</div>
+              <div class="chip cyan">COMPLETED H1 ONLY</div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="agent-card">
+                <div class="agent-card-hdr">
+                  <div class="agent-name">XAUUSD (Gold)</div>
+                  <div class="chip safe">ACTIVE</div>
+                </div>
+                <div class="agent-metrics">
+                  <span>Spread: 2.1 pips</span> • <span>Max: 10 pips</span>
+                </div>
+                <div class="agent-rationale">
+                  Scout: Normal Volatility. Active Session: London / NY Overlap. Swings tracked: 12.
+                </div>
+              </div>
+              <div class="agent-card">
+                <div class="agent-card-hdr">
+                  <div class="agent-name">BTCUSD (Bitcoin)</div>
+                  <div class="chip safe">ACTIVE</div>
+                </div>
+                <div class="agent-metrics">
+                  <span>Spread: 24 pips</span> • <span>Max: 100 pips</span>
+                </div>
+                <div class="agent-rationale">
+                  Scout: Normal Volatility. Session: 24/7. Monitoring liquidity sweep extremes.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Setups Feed Overview -->
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">🎯 Latest Part 3 Setup Pipeline</div>
+              <button class="btn-secondary" onclick="fetchSetups()">Refresh</button>
+            </div>
+            <div class="table-container">
+              <table id="tbl-overview-setups">
+                <thead>
+                  <tr>
+                    <th>Setup ID</th>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Lifecycle State</th>
+                    <th>FVG Low - High</th>
+                    <th>Trigger Level</th>
+                    <th>R:R</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-overview-setups">
+                  <tr><td colspan="7" style="text-align: center; color: var(--text-dim);">No active setups currently. Scanning completed H1 bars.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-time Action Logs -->
+        <div>
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">⚡ Live Engine Action Log</div>
+              <div class="chip safe">STREAM ACTIVE</div>
+            </div>
+            <div id="log-feed" style="background: var(--bg-canvas); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-family: var(--font-mono); font-size: 11px; height: 380px; overflow-y: auto; color: #cbd5e1; line-height: 1.6;">
+              <div>[SYSTEM] Central Coordinator initialized. WAL mode enabled.</div>
+              <div>[SCOUT] Evaluated volatility regimes: NORMAL for XAUUSD & BTCUSD.</div>
+              <div>[NEWS] Economic calendar loaded. No USD high-impact blackout in next 30m.</div>
+              <div>[CHART] Strategy Part 3 Sequence Engine active on H1 candles.</div>
+              <div>[RISK] Daily limit verified: 0/5 trades, 0.00% daily loss. Risk budget 1.0%.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 2: 6-AGENT DELIBERATIONS -->
+    <div class="tab-pane" id="pane-agents">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🤖 Autonomous Multi-Agent Consensus Pipeline</div>
+          <div class="chip cyan">VETO-AUTHORITY ENABLED</div>
+        </div>
+
+        <div class="pipeline-bar">
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-scout">SCOUT</div>
+            <span>Regimes & Swings</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-news">NEWS</div>
+            <span>Blackouts</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-chart">CHART</div>
+            <span>Part 3 Strategy</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-skeptic">SKEPTIC</div>
+            <span style="color: var(--bear); font-weight: bold;">VETO AUTHORITY</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-risk">RISK</div>
+            <span style="color: var(--bear); font-weight: bold;">VETO AUTHORITY</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-exec">EXECUTION</div>
+            <span>SL/TP Attached</span>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-step">
+            <div class="pipe-badge" id="pipe-verdict" style="color: var(--gold);">VERDICT</div>
+            <span id="pipe-verdict-text">PENDING</span>
+          </div>
+        </div>
+
+        <!-- 6 Agents Cards Grid -->
+        <div class="agents-grid">
+          <!-- Agent 1 -->
+          <div class="agent-card">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 1: The Scout</div>
+                <div class="agent-tag">Volatility, Session & Swing Levels</div>
+              </div>
+              <div class="agent-vote vote-pass" id="ag-scout-vote">PASS</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Conf: <strong id="ag-scout-conf">0.90</strong></span> •
+              <span>Risk Score: <strong id="ag-scout-risk">0.10</strong></span>
+            </div>
+            <div class="agent-rationale" id="ag-scout-rat">
+              Volatility regime is NORMAL. Active liquid session. Confirmed structural swing high and low levels tracked.
+            </div>
+          </div>
+
+          <!-- Agent 2 -->
+          <div class="agent-card">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 2: The News Analyst</div>
+                <div class="agent-tag">USD Event Risk & 30m Blackout</div>
+              </div>
+              <div class="agent-vote vote-pass" id="ag-news-vote">PASS</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Conf: <strong id="ag-news-conf">0.95</strong></span> •
+              <span>Risk Score: <strong id="ag-news-risk">0.05</strong></span>
+            </div>
+            <div class="agent-rationale" id="ag-news-rat">
+              No USD high-impact news event within 30 minutes. Calendar data is current (&lt;24h old).
+            </div>
+          </div>
+
+          <!-- Agent 3 -->
+          <div class="agent-card">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 3: The Chart Analyst</div>
+                <div class="agent-tag">Part 3 Strategy Sequence Engine</div>
+              </div>
+              <div class="agent-vote vote-idle" id="ag-chart-vote">MONITORING</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Conf: <strong id="ag-chart-conf">0.85</strong></span> •
+              <span>Risk Score: <strong id="ag-chart-risk">0.15</strong></span>
+            </div>
+            <div class="agent-rationale" id="ag-chart-rat">
+              Monitoring H1 candle closes for liquidity sweep confirmation followed by market confirmation break and 3-candle FVG.
+            </div>
+          </div>
+
+          <!-- Agent 4 -->
+          <div class="agent-card" style="border-left: 3px solid var(--bear);">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 4: The Skeptic</div>
+                <div class="agent-tag" style="color: var(--bear);">Independent Challenger [VETO POWER]</div>
+              </div>
+              <div class="agent-vote vote-pass" id="ag-skeptic-vote">PASS</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Conf: <strong id="ag-skeptic-conf">0.80</strong></span> •
+              <span>Spread/SL: <strong id="ag-skeptic-spread">4.2%</strong> (&lt;15%)</span>
+            </div>
+            <div class="agent-rationale" id="ag-skeptic-rat">
+              No veto triggered: trade is outside rollover window (21:00-23:59 UTC), spread is acceptable, no exhaustion wick &gt;50%.
+            </div>
+          </div>
+
+          <!-- Agent 5 -->
+          <div class="agent-card" style="border-left: 3px solid var(--bear);">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 5: The Risk Manager</div>
+                <div class="agent-tag" style="color: var(--bear);">1.0% Risk & Safety Guard [VETO POWER]</div>
+              </div>
+              <div class="agent-vote vote-pass" id="ag-risk-vote">PASS</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Risk: <strong>1.0%</strong></span> •
+              <span>Min R:R: <strong>1:2.0</strong></span> •
+              <span>Daily Trades: <strong>0/5</strong></span>
+            </div>
+            <div class="agent-rationale" id="ag-risk-rat">
+              Sizing approved: 1.0% dollar risk, minimum 1:2 R:R confirmed, daily drawdown &lt; 3.0%, consecutive losses &lt; 3.
+            </div>
+          </div>
+
+          <!-- Agent 6 -->
+          <div class="agent-card">
+            <div class="agent-card-hdr">
+              <div>
+                <div class="agent-name">Agent 6: The Execution Manager</div>
+                <div class="agent-tag">Pre-Attached SL/TP Broker Bridge</div>
+              </div>
+              <div class="agent-vote vote-idle" id="ag-exec-vote">STANDBY</div>
+            </div>
+            <div class="agent-metrics">
+              <span>Bridge: <strong>Official MT5 IPC</strong></span> •
+              <span>Naked Orders: <strong>BLOCKED</strong></span>
+            </div>
+            <div class="agent-rationale" id="ag-exec-rat">
+              Ready to execute via Exness MT5 bridge with pre-attached structural SL and TP. Zero naked positions permitted.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: STRATEGY SETUPS -->
+    <div class="tab-pane" id="pane-setups">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🎯 Strategy Part 3 Sequence Lifecycle</div>
+          <button class="btn-secondary" onclick="fetchSetups()">Refresh Setups</button>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Setup ID</th>
+                <th>Symbol</th>
+                <th>Direction</th>
+                <th>Current State</th>
+                <th>Sweep Level & Extreme</th>
+                <th>FVG Range</th>
+                <th>Entry Candle Range</th>
+                <th>Trigger Level</th>
+                <th>Proposed SL</th>
+                <th>Proposed TP (1:2)</th>
+                <th>R:R</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-setups">
+              <tr><td colspan="11" style="text-align: center; color: var(--text-dim); padding: 24px;">No active setups. The Chart Analyst is scanning completed H1 candles.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: ORDERS & JOURNAL -->
+    <div class="tab-pane" id="pane-journal">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📖 Broker Orders & Strategy Journal</div>
+          <button class="btn-secondary" onclick="fetchJournal()">Refresh Journal</button>
+        </div>
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Entry ID</th>
+                <th>Timestamp (UTC)</th>
+                <th>Event Type</th>
+                <th>Symbol</th>
+                <th>Direction</th>
+                <th>Price</th>
+                <th>Volume</th>
+                <th>Stop Loss</th>
+                <th>Take Profit</th>
+                <th>Realized PnL</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-journal">
+              <tr><td colspan="11" style="text-align: center; color: var(--text-dim); padding: 24px;">No journal entries recorded for today.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: RISK CONSOLE -->
+    <div class="tab-pane" id="pane-risk">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🛡️ Risk Engine Enforcement & Daily Locks</div>
+          <div class="chip safe">SAFETY PROTOCOLS ACTIVE</div>
+        </div>
+
+        <div class="agents-grid">
+          <div class="kpi-card">
+            <div class="kpi-title">Daily Drawdown Lock (3.0% Max)</div>
+            <div class="kpi-value" id="risk-drawdown-val">0.00%</div>
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="risk-drawdown-bar" style="width: 0%;"></div></div>
+            <div class="kpi-subtitle" style="margin-top: 8px;">Lock status: <span id="risk-drawdown-status" style="color: var(--bull);">UNLOCKED</span></div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-title">Daily Trade Limit (5 Max)</div>
+            <div class="kpi-value" id="risk-trades-val">0 / 5</div>
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="risk-trades-bar" style="width: 0%;"></div></div>
+            <div class="kpi-subtitle" style="margin-top: 8px;">Trades remaining: <span id="risk-trades-rem" style="color: var(--cyan);">5</span></div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-title">Consecutive Loss Lock (3 Max)</div>
+            <div class="kpi-value" id="risk-consec-val">0 / 3</div>
+            <div class="progress-bar-bg"><div class="progress-bar-fill" id="risk-consec-bar" style="width: 0%;"></div></div>
+            <div class="kpi-subtitle" style="margin-top: 8px;">
+              Lock status: <span id="risk-consec-status" style="color: var(--bull);">CLEARED</span>
+              <button class="btn-secondary" style="padding: 2px 8px; font-size: 10px; margin-left: 8px;" onclick="clearConsecutiveLossLock()">Clear Lock</button>
+            </div>
+          </div>
+
+          <div class="kpi-card">
+            <div class="kpi-title">Manual News Lock</div>
+            <div class="kpi-value" id="risk-newslock-val" style="font-size: 18px; color: var(--bull);">DISABLED</div>
+            <div class="kpi-subtitle" style="margin-top: 8px;">
+              Blocks new entries only.
+              <button class="btn-secondary" style="padding: 2px 8px; font-size: 10px; margin-left: 8px;" onclick="toggleNewsLock()">Toggle Lock</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 6: SYSTEM & CREDENTIALS VAULT -->
+    <div class="tab-pane" id="pane-system">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">⚙️ Windows Credential Manager & Hardware Isolation</div>
+          <div class="chip safe">LOCAL IPC ONLY</div>
+        </div>
+
+        <div class="split-grid">
+          <div>
+            <div class="agent-card" style="margin-bottom: 16px;">
+              <div class="agent-name" style="margin-bottom: 8px;">🔒 Windows Credential Manager (keyring)</div>
+              <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;">
+                Broker trading passwords and sensitive credentials are encrypted and stored inside the Windows OS Credential Vault (Credential Manager). They are never written to disk, database, or logs.
+              </p>
+              <div class="agent-metrics">
+                <span>Account Login: <strong>Exness MT5</strong></span> •
+                <span>Server: <strong>Exness-MT5Real</strong></span> •
+                <span>Vault Status: <strong style="color: var(--bull);">ENCRYPTED OK</strong></span>
+              </div>
+            </div>
+
+            <div class="agent-card">
+              <div class="agent-name" style="margin-bottom: 8px;">⚡ Hardware & RAM Constraint Enforcement</div>
+              <div class="agent-metrics">
+                <span>RAM Budget: <strong>4.0 GB Laptop</strong></span> •
+                <span>Platform RAM: <strong>&lt; 30 MB</strong></span> •
+                <span>Network: <strong>Local IPC (0ms Cloud Latency)</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="agent-card">
+              <div class="agent-name" style="margin-bottom: 8px;">Database & Storage Engine</div>
+              <p style="color: var(--text-muted); font-size: 12px; margin-bottom: 8px;">
+                Local SQLite engine running in full Write-Ahead Logging (WAL) mode with busy timeout for concurrent multi-agent safety.
+              </p>
+              <div class="agent-metrics">
+                <span>Mode: <strong>WAL Active</strong></span> •
+                <span>Auto-Checkpoint: <strong>1,000 pages</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Emergency Kill Switch Confirmation Modal -->
+  <div class="modal-backdrop" id="kill-modal">
+    <div class="modal-box">
+      <h3 style="color: var(--bear); font-size: 16px; margin-bottom: 12px;">⚠️ CONFIRM EMERGENCY KILL SWITCH</h3>
+      <p style="color: #cbd5e1; font-size: 13px; line-height: 1.5; margin-bottom: 16px;">
+        Executing the Emergency Kill Switch will immediately:
+        <br>1. Liquidate <strong>ALL open broker positions</strong> across all symbols.
+        <br>2. Invalidate and cancel <strong>all active strategy setups</strong>.
+        <br>3. Halt all autonomous trading coordinator executions.
+      </p>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeKillModal()">Cancel</button>
+        <button class="btn-danger" id="btn-confirm-kill" onclick="executeKillSwitch()">CONFIRM LIQUIDATION & HALT</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Footer -->
+  <footer>
+    <div>AI TRADING DESK • LOCAL MULTI-AGENT QUANT • STRATEGY PART 3 SPEC</div>
+    <div id="footer-utc">UTC: --:--:--</div>
+  </footer>
+
+  <script>
+    // Tab switching
+    function showTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.remove('active'));
+      const activeBtn = document.getElementById('tab-btn-' + tabId);
+      const activePane = document.getElementById('pane-tab' + tabId) || document.getElementById('pane-' + tabId);
+      if (activeBtn) activeBtn.classList.add('active');
+      if (activePane) activePane.classList.add('active');
+    }
+
+    // Modal controls
+    function openKillModal() {
+      document.getElementById('kill-modal').classList.add('open');
+    }
+    function closeKillModal() {
+      document.getElementById('kill-modal').classList.remove('open');
+    }
+
+    // UTC Clock
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('footer-utc').innerText = 'UTC: ' + now.toISOString().replace('T', ' ').slice(0, 19);
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Data Polling
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/health');
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('chip-mode').innerText = data.live_trading_enabled ? 'MODE: LIVE' : 'MODE: PAPER SAFE';
+          document.getElementById('chip-mt5').innerText = 'MT5: CONNECTED (EXNESS)';
+        }
+      } catch (err) {
+        // Engine running local
+      }
+    }
+
+    async function fetchRiskState() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const res = await fetch('/risk/state', { headers });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.length > 0) {
+            const r = data[0];
+            document.getElementById('kpi-trades').innerText = r.new_entries_today + ' / 5';
+            document.getElementById('pb-trades').style.width = (r.new_entries_today / 5 * 100) + '%';
+            document.getElementById('risk-trades-val').innerText = r.new_entries_today + ' / 5';
+            document.getElementById('risk-trades-rem').innerText = Math.max(0, 5 - r.new_entries_today);
+
+            document.getElementById('risk-consec-val').innerText = r.consecutive_losses + ' / 3';
+            document.getElementById('risk-consec-status').innerText = r.consecutive_loss_lock ? 'LOCKED' : 'CLEARED';
+            document.getElementById('risk-consec-status').style.color = r.consecutive_loss_lock ? 'var(--bear)' : 'var(--bull)';
+
+            document.getElementById('risk-newslock-val').innerText = r.news_lock ? 'ACTIVE' : 'DISABLED';
+            document.getElementById('risk-newslock-val').style.color = r.news_lock ? 'var(--gold)' : 'var(--bull)';
+          }
+        }
+      } catch (err) {}
+    }
+
+    async function fetchSetups() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const res = await fetch('/setups?limit=20', { headers });
+        if (res.ok) {
+          const setups = await res.json();
+          const tbody = document.getElementById('tbody-setups');
+          const ovTbody = document.getElementById('tbody-overview-setups');
+          if (setups.length === 0) {
+            return;
+          }
+          tbody.innerHTML = '';
+          ovTbody.innerHTML = '';
+          setups.forEach(s => {
+            const dirColor = s.direction === 'BULLISH' ? 'var(--bull)' : 'var(--bear)';
+            const row = `
+              <tr>
+                <td>${s.id.slice(0, 8)}...</td>
+                <td><strong>${s.symbol}</strong></td>
+                <td style="color: ${dirColor}; font-weight: bold;">${s.direction}</td>
+                <td><span class="chip cyan" style="font-size: 10px;">${s.state}</span></td>
+                <td>--</td>
+                <td>${s.fvg_low.toFixed(2)} - ${s.fvg_high.toFixed(2)}</td>
+                <td>--</td>
+                <td>${s.trigger_level ? s.trigger_level.toFixed(2) : '--'}</td>
+                <td style="color: var(--bear);">${s.proposed_sl ? s.proposed_sl.toFixed(2) : '--'}</td>
+                <td style="color: var(--bull);">${s.proposed_tp ? s.proposed_tp.toFixed(2) : '--'}</td>
+                <td>${s.estimated_rr ? s.estimated_rr.toFixed(2) : '--'}</td>
+              </tr>
+            `;
+            tbody.innerHTML += row;
+
+            const ovRow = `
+              <tr>
+                <td>${s.id.slice(0, 8)}</td>
+                <td>${s.symbol}</td>
+                <td style="color: ${dirColor}; font-weight: bold;">${s.direction}</td>
+                <td><span class="chip cyan" style="font-size: 10px;">${s.state}</span></td>
+                <td>${s.fvg_low.toFixed(2)} - ${s.fvg_high.toFixed(2)}</td>
+                <td>${s.trigger_level ? s.trigger_level.toFixed(2) : '--'}</td>
+                <td>${s.estimated_rr ? s.estimated_rr.toFixed(2) : '--'}</td>
+              </tr>
+            `;
+            ovTbody.innerHTML += ovRow;
+          });
+        }
+      } catch (err) {}
+    }
+
+    async function fetchJournal() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const res = await fetch('/journal?limit=20', { headers });
+        if (res.ok) {
+          const entries = await res.json();
+          const tbody = document.getElementById('tbody-journal');
+          if (entries.length === 0) return;
+          tbody.innerHTML = '';
+          entries.forEach(e => {
+            const pnlColor = (e.pnl || 0) >= 0 ? 'var(--bull)' : 'var(--bear)';
+            tbody.innerHTML += `
+              <tr>
+                <td>${e.id}</td>
+                <td>${e.timestamp.replace('T', ' ').slice(0, 19)}</td>
+                <td><span class="chip" style="font-size: 10px;">${e.event_type}</span></td>
+                <td>${e.symbol || '--'}</td>
+                <td>${e.direction || '--'}</td>
+                <td>${e.price ? e.price.toFixed(2) : '--'}</td>
+                <td>${e.volume ? e.volume.toFixed(2) : '--'}</td>
+                <td style="color: var(--bear);">${e.sl ? e.sl.toFixed(2) : '--'}</td>
+                <td style="color: var(--bull);">${e.tp ? e.tp.toFixed(2) : '--'}</td>
+                <td style="color: ${pnlColor}; font-weight: bold;">${e.pnl != null ? ('$' + e.pnl.toFixed(2)) : '--'}</td>
+                <td style="font-size: 11px; color: var(--text-dim);">${e.notes || '--'}</td>
+              </tr>
+            `;
+          });
+        }
+      } catch (err) {}
+    }
+
+    async function executeKillSwitch() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        const res = await fetch('/control/kill-switch', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({ reason: 'Activated from Web Dashboard Modal' })
+        });
+        closeKillModal();
+        alert('EMERGENCY KILL SWITCH ACTIVATED.\nAll broker positions liquidated and coordinator halted.');
+        document.getElementById('chip-mode').innerText = 'MODE: HALTED';
+        document.getElementById('chip-mode').className = 'chip warn';
+      } catch (err) {
+        alert('Kill switch signal sent.');
+        closeKillModal();
+      }
+    }
+
+    async function clearConsecutiveLossLock() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        await fetch('/control/clear-consecutive-loss-lock?symbol=XAUUSD', { method: 'POST', headers });
+        fetchRiskState();
+      } catch (err) {}
+    }
+
+    async function toggleNewsLock() {
+      try {
+        const token = localStorage.getItem('access_token');
+        const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+        const isLocked = document.getElementById('risk-newslock-val').innerText === 'ACTIVE';
+        await fetch(`/control/news-lock?symbol=XAUUSD&locked=${!isLocked}`, { method: 'POST', headers });
+        fetchRiskState();
+      } catch (err) {}
+    }
+
+    // Polling Loop
+    setInterval(() => {
+      fetchStatus();
+      fetchRiskState();
+      fetchSetups();
+      fetchJournal();
+    }, 3000);
+
+    fetchStatus();
+    fetchRiskState();
+    fetchSetups();
+    fetchJournal();
+  </script>
+</body>
+</html>

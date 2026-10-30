@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.eggs/
+*.egg
+
+# Secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+credentials/
+
+# Database files — contain live trade data
+data/db/*.db
+data/db/*.db-wal
+data/db/*.db-shm
+
+# Logs
+data/logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+frontend/.vercel/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Kiro
+.kiro/
+
+# Distribution
+*.tar.gz
+*.zip

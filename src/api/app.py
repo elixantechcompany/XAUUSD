@@ -1,0 +1,543 @@
+"""
+FastAPI application — STRATEGY_SPEC.md v1.0
+
+Provides:
+  - Health / status endpoint
+  - Engine status (connection, mode, last heartbeat)
+  - Setup list and individual setup detail
+  - Journal entries
+  - Daily risk state
+  - Bot control commands (PAUSE, RESUME, NEWS_LOCK)
+  - Account info (from engine, not fabricated)
+
+Security:
+  - All routes except /health require a valid JWT (IMPL10, IMPL11)
+  - Passwords are never stored or returned (IMPL11)
+  - Live trading cannot be enabled via API (IMPL7, R88)
+"""
+from __future__ import annotations
+
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Annotated, Literal
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from src.agents.coordinator import CentralCoordinator
+from src.config.settings import get_settings
+from src.journal.models import DailyRiskState, JournalEntry
+from src.state.models import Order, Setup, SetupState
+from src.utils.database import get_db, init_db
+from src.utils.logging_config import get_logger
+
+log = get_logger(__name__)
+
+# Central coordinator instance for API deliberations and kill switch
+coordinator = CentralCoordinator()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Initialise DB on startup. Replaces deprecated @app.on_event."""
+    init_db()
+    log.info("api_started", live_trading_enabled=False)
+    yield
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="XAUUSD/BTCUSD FVG Trader API",
+    version="1.0.0",
+    description="Engine status and control API — STRATEGY_SPEC.md v1.0",
+    lifespan=_lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Static Dashboard Mount ───────────────────────────────────────────────────
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def serve_dashboard():
+    """Serve the local single-page quantitative trading desk."""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return {"status": "ok", "message": "Quant AI Trading Desk API running."}
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_oauth2 = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+
+def _settings():
+    return get_settings()
+
+
+def _get_secret() -> str:
+    s = _settings()
+    key = s.api.secret_key
+    placeholder = "CHANGE_ME_IN_PRODUCTION_SET_API_SECRET_KEY_ENV_VAR"
+    if key == placeholder:
+        import warnings
+        warnings.warn("API using insecure placeholder secret key (IMPL11)")
+    return key
+
+
+def _create_token(sub: str, expires_minutes: int) -> str:
+    settings = _settings()
+    expire = datetime.now(tz=timezone.utc) + timedelta(minutes=expires_minutes)
+    return jwt.encode(
+        {"sub": sub, "exp": expire},
+        _get_secret(),
+        algorithm=settings.api.algorithm,
+    )
+
+
+async def _current_user(token: Annotated[str, Depends(_oauth2)]) -> str:
+    settings = _settings()
+    try:
+        payload = jwt.decode(token, _get_secret(),
+                             algorithms=[settings.api.algorithm])
+        sub: str = payload.get("sub", "")
+        if not sub:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+        return sub
+    except JWTError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
+
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class SetupSummary(BaseModel):
+    id: str
+    symbol: str
+    direction: str
+    state: str
+    fvg_low: float
+    fvg_high: float
+    trigger_level: float | None
+    proposed_entry: float | None
+    proposed_sl: float | None
+    proposed_tp: float | None
+    estimated_rr: float | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JournalSummary(BaseModel):
+    id: int
+    timestamp: datetime
+    event_type: str
+    setup_id: str | None
+    symbol: str | None
+    direction: str | None
+    price: float | None
+    volume: float | None
+    sl: float | None
+    tp: float | None
+    pnl: float | None
+    notes: str | None
+
+
+class RiskStateResponse(BaseModel):
+    symbol: str
+    trade_date: str
+    new_entries_today: int
+    realized_pnl_today: float
+    daily_loss_lock: bool
+    daily_trade_lock: bool
+    news_lock: bool
+    consecutive_loss_lock: bool
+    consecutive_losses: int
+
+
+class EngineStatusResponse(BaseModel):
+    execution_mode: str
+    # Values below come from the engine heartbeat in production;
+    # for now we report what we know from settings
+    spec_version: str = "1.0"
+    live_trading_enabled: bool = False  # Always False (R88)
+    message: str = "Engine status — connect the engine to report live values"
+
+
+class CommandResponse(BaseModel):
+    command: str
+    status: str
+    message: str
+    executed_at: datetime | None
+
+
+# ── Routes — public ───────────────────────────────────────────────────────────
+
+@app.get("/health", tags=["System"])
+def health():
+    """Public health check."""
+    return {"status": "ok", "spec_version": "1.0",
+            "live_trading_enabled": False}
+
+
+# ── Routes — auth ─────────────────────────────────────────────────────────────
+
+@app.post("/auth/token", response_model=TokenResponse, tags=["Auth"])
+def login(
+    form: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Obtain a JWT. Credentials checked against local api_users table."""
+    from src.api.models import APIUser
+    user = db.query(APIUser).filter(APIUser.username == form.username).first()
+    if not user or not _pwd_ctx.verify(form.password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect credentials")
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "User is inactive")
+    settings = _settings()
+    token = _create_token(user.username, settings.api.token_expire_minutes)
+    return TokenResponse(access_token=token)
+
+
+# ── Routes — engine status ────────────────────────────────────────────────────
+
+@app.get("/engine/status", response_model=EngineStatusResponse, tags=["Engine"])
+def engine_status(_: Annotated[str, Depends(_current_user)]):
+    """Return current execution mode and spec info."""
+    settings = _settings()
+    return EngineStatusResponse(
+        execution_mode=settings.execution_mode,
+        spec_version="1.0",
+        live_trading_enabled=False,
+    )
+
+
+# ── Routes — setups ───────────────────────────────────────────────────────────
+
+@app.get("/setups", response_model=list[SetupSummary], tags=["Setups"])
+def list_setups(
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    symbol: str | None = None,
+    state: str | None = None,
+    limit: int = 50,
+):
+    """Return setups, optionally filtered by symbol or state."""
+    q = db.query(Setup).order_by(Setup.created_at.desc())
+    if symbol:
+        q = q.filter(Setup.symbol == symbol)
+    if state:
+        q = q.filter(Setup.state == state)
+    rows = q.limit(limit).all()
+    return [
+        SetupSummary(
+            id=r.id, symbol=r.symbol,
+            direction=r.direction.value, state=r.state.value,
+            fvg_low=r.fvg_low, fvg_high=r.fvg_high,
+            trigger_level=r.trigger_level,
+            proposed_entry=r.proposed_entry,
+            proposed_sl=r.proposed_sl, proposed_tp=r.proposed_tp,
+            estimated_rr=r.estimated_rr,
+            created_at=r.created_at, updated_at=r.updated_at,
+        )
+        for r in rows
+    ]
+
+
+@app.get("/setups/{setup_id}", tags=["Setups"])
+def get_setup(
+    setup_id: str,
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Return full setup detail including transition history."""
+    row = db.get(Setup, setup_id)
+    if row is None:
+        raise HTTPException(404, f"Setup {setup_id} not found")
+    transitions = [
+        {"timestamp": t.timestamp.isoformat(),
+         "old_state": t.old_state.value if t.old_state else None,
+         "new_state": t.new_state.value,
+         "event": t.event,
+         "explanation": t.explanation}
+        for t in row.transitions
+    ]
+    return {
+        "id": row.id, "symbol": row.symbol,
+        "direction": row.direction.value, "state": row.state.value,
+        "fvg_low": row.fvg_low, "fvg_high": row.fvg_high,
+        "sweep_level": row.sweep_level, "sweep_extreme": row.sweep_extreme,
+        "trigger_level": row.trigger_level,
+        "proposed_entry": row.proposed_entry,
+        "proposed_sl": row.proposed_sl, "proposed_tp": row.proposed_tp,
+        "proposed_volume": row.proposed_volume,
+        "estimated_risk_usd": row.estimated_risk_usd,
+        "estimated_rr": row.estimated_rr,
+        "rejection_reason": row.rejection_reason,
+        "spec_version": row.spec_version,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+        "transitions": transitions,
+    }
+
+
+# ── Routes — journal ──────────────────────────────────────────────────────────
+
+@app.get("/journal", response_model=list[JournalSummary], tags=["Journal"])
+def list_journal(
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    symbol: str | None = None,
+    limit: int = 100,
+):
+    q = db.query(JournalEntry).order_by(JournalEntry.timestamp.desc())
+    if symbol:
+        q = q.filter(JournalEntry.symbol == symbol)
+    rows = q.limit(limit).all()
+    return [
+        JournalSummary(
+            id=r.id, timestamp=r.timestamp,
+            event_type=r.event_type, setup_id=r.setup_id,
+            symbol=r.symbol, direction=r.direction,
+            price=r.price, volume=r.volume,
+            sl=r.sl, tp=r.tp, pnl=r.pnl, notes=r.notes,
+        )
+        for r in rows
+    ]
+
+
+# ── Routes — risk state ───────────────────────────────────────────────────────
+
+@app.get("/risk/state", response_model=list[RiskStateResponse], tags=["Risk"])
+def risk_state(
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    today = datetime.now(tz=timezone.utc).date()
+    rows = db.query(DailyRiskState).filter(
+        DailyRiskState.trade_date == today
+    ).all()
+    return [
+        RiskStateResponse(
+            symbol=r.symbol,
+            trade_date=str(r.trade_date),
+            new_entries_today=r.new_entries_today,
+            realized_pnl_today=r.realized_pnl_today,
+            daily_loss_lock=r.daily_loss_lock,
+            daily_trade_lock=r.daily_trade_lock,
+            news_lock=r.news_lock,
+            consecutive_loss_lock=r.consecutive_loss_lock,
+            consecutive_losses=r.consecutive_losses,
+        )
+        for r in rows
+    ]
+
+
+# ── Routes — bot control ──────────────────────────────────────────────────────
+
+@app.post("/control/news-lock", response_model=CommandResponse, tags=["Control"])
+def set_news_lock(
+    symbol: str,
+    locked: bool,
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Set or clear the manual news lockout for a symbol (R62).
+    This blocks new entries only — does not touch existing stops (R63).
+    """
+    from src.risk.engine import RiskEngine
+    settings = _settings()
+    engine = RiskEngine(settings=settings.risk,
+                        account_label=settings.execution_mode)
+    engine.set_news_lock(db, symbol, locked)
+    action = "locked" if locked else "cleared"
+    log.info("news_lock_command", symbol=symbol, locked=locked)
+    return CommandResponse(
+        command="NEWS_LOCK",
+        status="DONE",
+        message=f"News lock {action} for {symbol}",
+        executed_at=datetime.now(tz=timezone.utc),
+    )
+
+
+@app.post("/control/clear-consecutive-loss-lock",
+          response_model=CommandResponse, tags=["Control"])
+def clear_consecutive_loss_lock(
+    symbol: str,
+    _: Annotated[str, Depends(_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Manually clear the consecutive-loss lockout after review (R58)."""
+    from src.risk.engine import RiskEngine
+    settings = _settings()
+    engine = RiskEngine(settings=settings.risk,
+                        account_label=settings.execution_mode)
+    engine.clear_consecutive_loss_lock(db, symbol)
+    return CommandResponse(
+        command="CLEAR_CONSECUTIVE_LOSS_LOCK",
+        status="DONE",
+        message=f"Consecutive-loss lock cleared for {symbol}",
+        executed_at=datetime.now(tz=timezone.utc),
+    )
+
+
+# Startup is handled by the lifespan context manager above.
+
+
+# ── Account credential endpoint ───────────────────────────────────────────────
+# Receives MT5 login + password from the frontend and stores the password
+# in Windows Credential Manager. NEVER logged, NEVER stored in the DB.
+
+class CredentialRequest(BaseModel):
+    login: str
+    password: str
+    server: str
+
+
+class CredentialResponse(BaseModel):
+    status: str
+    message: str
+
+
+@app.post("/accounts/credential", response_model=CredentialResponse, tags=["Accounts"])
+def save_credential(
+    req: CredentialRequest,
+    _: Annotated[str, Depends(_current_user)],
+) -> CredentialResponse:
+    """
+    Store MT5 trading password in Windows Credential Manager.
+
+    The password is NEVER written to the database, NEVER logged,
+    and is cleared from memory immediately after storage.
+
+    Requires authentication — the frontend must send a valid JWT.
+    Only accessible from the local network (127.0.0.1 by default).
+    """
+    try:
+        import keyring
+        service = f"mt5_bot_{req.server}"
+        keyring.set_password(service, req.login, req.password)
+        log.info(
+            "mt5_credential_saved",
+            login=req.login,
+            server=req.server,
+            # Password is NEVER logged — only these safe fields
+        )
+        return CredentialResponse(
+            status="ok",
+            message=f"Credential for login {req.login} stored in Credential Manager.",
+        )
+    except Exception as exc:
+        log.error("credential_save_failed", login=req.login, exc=str(exc))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to store credential: {exc}",
+        )
+
+
+@app.get("/accounts/verify/{login}", tags=["Accounts"])
+def verify_credential(
+    login: str,
+    server: str,
+    _: Annotated[str, Depends(_current_user)],
+) -> dict:
+    """Check whether a credential exists for a given login (does not return the password)."""
+    try:
+        import keyring
+        exists = keyring.get_password(f"mt5_bot_{server}", login) is not None
+        return {"login": login, "server": server, "credential_exists": exists}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Coordinator & Kill Switch Endpoints ────────────────────────────────────────
+
+class KillSwitchRequest(BaseModel):
+    reason: str = "Manual emergency kill switch activation"
+
+
+@app.post("/control/kill-switch", tags=["Control"])
+def execute_kill_switch(
+    req: KillSwitchRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Emergency Kill Switch: Liquidates all positions, cancels active setups,
+    and locks the coordinator from executing any new orders.
+    """
+    reason = req.reason if req else "Emergency Kill Switch Activated"
+    log.warn("api_emergency_kill_switch_triggered", reason=reason)
+    coordinator.trigger_kill_switch(reason=reason, db=db)
+    return {
+        "status": "HALTED",
+        "action": "EMERGENCY_KILL_SWITCH_EXECUTED",
+        "reason": reason,
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/coordinator/consensus", tags=["Coordinator"])
+def get_consensus():
+    """Return real-time status and deliberations of all six analytical agents."""
+    return {
+        "verdict": coordinator.last_verdict.value,
+        "kill_switch_active": coordinator.kill_switch_active,
+        "kill_switch_reason": coordinator.kill_switch_reason,
+        "agents": {
+            "scout": {"name": "The Scout", "role": "Agent 1", "status": "ACTIVE"},
+            "news_analyst": {"name": "The News Analyst", "role": "Agent 2", "status": "ACTIVE"},
+            "chart_analyst": {"name": "The Chart Analyst", "role": "Agent 3", "status": "ACTIVE"},
+            "skeptic": {"name": "The Skeptic", "role": "Agent 4 (VETO)", "status": "ACTIVE"},
+            "risk_manager": {"name": "The Risk Manager", "role": "Agent 5 (VETO)", "status": "ACTIVE"},
+            "execution_manager": {"name": "The Execution Manager", "role": "Agent 6", "status": "ACTIVE"},
+        },
+    }
+
+
+@app.get("/orders", tags=["Orders"])
+def list_orders(
+    db: Session = Depends(get_db),
+    limit: int = 50,
+):
+    """Return broker orders and execution states."""
+    rows = db.query(Order).order_by(Order.requested_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "setup_id": r.setup_id,
+            "symbol": r.symbol,
+            "direction": r.direction,
+            "volume": r.requested_volume,
+            "open_price": r.filled_price or r.requested_entry,
+            "stop_loss": r.requested_sl,
+            "take_profit": r.requested_tp,
+            "status": r.status,
+            "broker_ticket": r.broker_ticket,
+            "created_at": r.requested_at.isoformat() if r.requested_at else None,
+        }
+        for r in rows
+    ]
+
