@@ -37,6 +37,7 @@ export function TopBar() {
     if (signingOut) return;
     setSigningOut(true);
     try {
+      localStorage.removeItem("elixan_session_active");
       const client = getSupabaseClient();
       await client.auth.signOut();
     } catch {

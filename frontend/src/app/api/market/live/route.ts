@@ -28,15 +28,22 @@ export async function GET(request: NextRequest) {
       if (rows && rows.length > 0 && rows[0].value) {
         const val = rows[0].value;
         const symData = val[requestedSymbol] || (requestedSymbol === "XAUUSD" ? val.XAUUSD : val.BTCUSD);
-        return NextResponse.json({
-          success: true,
-          symbol: requestedSymbol,
-          bot_status: val.bot_status || "BOT RUNNING · ANALYZING MARKET",
-          bot_state: val.bot_state || "ANALYZING",
-          reasoning: val.reasoning || "Autonomous quantitative SMC analysis active.",
-          updated_at: val.updated_at || rows[0].updated_at,
-          data: symData,
-        });
+        return NextResponse.json(
+          {
+            success: true,
+            symbol: requestedSymbol,
+            bot_status: val.bot_status || "BOT RUNNING · ANALYZING MARKET",
+            bot_state: val.bot_state || "ANALYZING",
+            reasoning: val.reasoning || "Autonomous quantitative SMC analysis active.",
+            updated_at: val.updated_at || rows[0].updated_at,
+            data: symData,
+          },
+          {
+            headers: {
+              "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2",
+            },
+          }
+        );
       }
     }
 

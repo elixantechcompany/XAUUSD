@@ -30,6 +30,7 @@ export function DesktopSidebar() {
 
   async function handleSignOut() {
     try {
+      localStorage.removeItem("elixan_session_active");
       await getSupabaseClient().auth.signOut();
       router.replace("/");
     } catch {
@@ -41,7 +42,7 @@ export function DesktopSidebar() {
     <aside className="w-60 bg-surface border-r border-border flex flex-col shrink-0 transition-colors duration-200">
       {/* Brand Logo Header */}
       <div className="p-4 border-b border-border">
-        <Link href="/" className="flex items-center gap-2.5 group">
+        <Link href="/" prefetch={true} className="flex items-center gap-2.5 group">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gold/20 via-accent/20 to-emerald-500/20 border border-gold/40 flex items-center justify-center shadow-[0_0_15px_rgba(212,175,55,0.2)] group-hover:border-gold/70 transition-all">
             <Zap className="w-4 h-4 text-gold fill-gold/20" aria-hidden />
           </div>
@@ -64,6 +65,7 @@ export function DesktopSidebar() {
             <Link
               key={href}
               href={href}
+              prefetch={true}
               className={cn(
                 "flex items-center gap-3 px-3.5 py-2.5 rounded-inner text-xs font-semibold transition-all min-h-[40px]",
                 active

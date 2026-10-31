@@ -9,32 +9,77 @@ import { DesktopSidebar }   from "@/components/navigation/desktop-sidebar";
 import { TopBar }           from "@/components/navigation/top-bar";
 import { Zap } from "lucide-react";
 
+function checkHasSession(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    if (localStorage.getItem("elixan_session_active") === "1") return true;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith("sb-") || k.includes("auth-token"))) {
+        const val = localStorage.getItem(k);
+        if (val && val.includes("access_token")) return true;
+      }
+    }
+    if (document.cookie.includes("sb-") && document.cookie.includes("-auth-token")) return true;
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const [authorized, setAuthorized] = useState<boolean | null>(null);
+  // Synchronous initial check ensures 0ms delay — zero full-screen blocking
+  const [authorized, setAuthorized] = useState<boolean>(() => checkHasSession());
 
   useEffect(() => {
     const client = getSupabaseClient();
+    const hasToken = checkHasSession();
 
-    // Check existing session in cookies / localStorage
+    if (!hasToken) {
+      setAuthorized(false);
+      router.replace("/auth/login");
+      return;
+    }
+
+    // Verify session in the background without blocking the UI
     client.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
+        try {
+          localStorage.removeItem("elixan_session_active");
+        } catch {
+          // ignore
+        }
         setAuthorized(false);
         router.replace("/auth/login");
       } else {
-        setAuthorized(true);
+        try {
+          localStorage.setItem("elixan_session_active", "1");
+        } catch {
+          // ignore
+        }
       }
+    }).catch(() => {
+      // In case of transient network slowness, keep session active
     });
 
-    // Listen for auth state changes
     const {
       data: { subscription },
     } = client.auth.onAuthStateChange((_event, session) => {
       if (!session) {
+        try {
+          localStorage.removeItem("elixan_session_active");
+        } catch {
+          // ignore
+        }
         setAuthorized(false);
         router.replace("/auth/login");
       } else {
-        setAuthorized(true);
+        try {
+          localStorage.setItem("elixan_session_active", "1");
+        } catch {
+          // ignore
+        }
       }
     });
 
@@ -43,21 +88,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     };
   }, [router]);
 
-  // Loading state while verifying credentials
-  if (authorized === null) {
-    return (
-      <div className="min-h-screen bg-[#070A0F] text-[#F2F5F9] flex flex-col items-center justify-center gap-3">
-        <div className="w-12 h-12 rounded-xl bg-gold/10 border border-gold/30 flex items-center justify-center shadow-[0_0_20px_rgba(212,175,55,0.2)]">
-          <Zap className="w-6 h-6 text-gold fill-gold/20 animate-pulse" />
-        </div>
-        <div className="text-xs font-mono tracking-widest text-text-secondary uppercase">
-          Verifying Session...
-        </div>
-      </div>
-    );
-  }
-
-  // If unauthorized, return null while router.replace executes
   if (!authorized) {
     return null;
   }

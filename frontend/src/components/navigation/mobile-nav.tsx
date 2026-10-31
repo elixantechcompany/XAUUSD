@@ -26,6 +26,7 @@ export function MobileNav() {
             <Link
               key={href}
               href={href}
+              prefetch={true}
               className={cn(
                 "flex flex-col items-center gap-1 px-3 min-h-[44px] min-w-[44px] justify-center transition-colors relative",
                 active ? "text-gold font-bold" : "text-text-secondary hover:text-white"

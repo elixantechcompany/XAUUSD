@@ -30,16 +30,19 @@ export async function GET() {
       "Content-Type": "application/json",
     };
 
-    // 1. Fetch latest heartbeat
+    // 1. Fetch heartbeat, snapshot and settings concurrently in parallel (3x faster)
+    const [hbRes, snapRes, settingsRes] = await Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/settings?select=key,value&key=like.mt5_account_*`, { headers, cache: "no-store" }).catch(() => null),
+    ]);
+
     let terminalOnline = false;
     let liveEquity = 0.0;
     let liveBalance = 0.0;
-    try {
-      const hbRes = await fetch(`${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`, {
-        headers,
-        cache: "no-store",
-      });
-      if (hbRes.ok) {
+
+    if (hbRes && hbRes.ok) {
+      try {
         const hbData = await hbRes.json();
         if (hbData && hbData.length > 0) {
           const hb = hbData[0];
@@ -50,39 +53,30 @@ export async function GET() {
           if (hb.equity != null) liveEquity = Number(hb.equity);
           if (hb.balance != null) liveBalance = Number(hb.balance);
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
-    // 2. Fetch latest snapshot if equity still 0
-    if (liveEquity === 0.0) {
+    if (liveEquity === 0.0 && snapRes && snapRes.ok) {
       try {
-        const snapRes = await fetch(`${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`, {
-          headers,
-          cache: "no-store",
-        });
-        if (snapRes.ok) {
-          const snapData = await snapRes.json();
-          if (snapData && snapData.length > 0) {
-            if (snapData[0].equity != null) liveEquity = Number(snapData[0].equity);
-            if (snapData[0].balance != null) liveBalance = Number(snapData[0].balance);
-          }
+        const snapData = await snapRes.json();
+        if (snapData && snapData.length > 0) {
+          if (snapData[0].equity != null) liveEquity = Number(snapData[0].equity);
+          if (snapData[0].balance != null) liveBalance = Number(snapData[0].balance);
         }
       } catch {
         // ignore
       }
     }
 
-    // 3. Fetch account settings from Supabase
-    const settingsRes = await fetch(
-      `${supabaseUrl}/rest/v1/settings?select=key,value&key=like.mt5_account_*`,
-      { headers, cache: "no-store" }
-    );
-
     let rows: Array<{ key: string; value: AccountSetting }> = [];
-    if (settingsRes.ok) {
-      rows = await settingsRes.json();
+    if (settingsRes && settingsRes.ok) {
+      try {
+        rows = await settingsRes.json();
+      } catch {
+        // ignore
+      }
     }
 
     const masterRow = rows.find(
@@ -128,13 +122,20 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({
-      terminal_online: terminalOnline,
-      master,
-      children,
-      total_children: children.length,
-      active_children: children.filter((c) => c.is_active).length,
-    });
+    return NextResponse.json(
+      {
+        terminal_online: terminalOnline,
+        master,
+        children,
+        total_children: children.length,
+        active_children: children.filter((c) => c.is_active).length,
+      },
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2",
+        },
+      }
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Internal Server Error";
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -15,26 +15,22 @@ export async function GET() {
       "Content-Type": "application/json",
     };
 
-    // 1. Fetch latest heartbeat
-    const hbRes = await fetch(
-      `${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`,
-      { headers, cache: "no-store" }
-    );
+    // 1. Fetch heartbeat and snapshot concurrently in parallel (2x faster)
+    const [hbRes, snapRes] = await Promise.all([
+      fetch(`${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
+    ]);
+
     let heartbeat = null;
-    if (hbRes.ok) {
+    if (hbRes && hbRes.ok) {
       const hbList = await hbRes.json();
       if (hbList && hbList.length > 0) {
         heartbeat = hbList[0];
       }
     }
 
-    // 2. Fetch latest account snapshot
-    const snapRes = await fetch(
-      `${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`,
-      { headers, cache: "no-store" }
-    );
     let snapshot = null;
-    if (snapRes.ok) {
+    if (snapRes && snapRes.ok) {
       const snapList = await snapRes.json();
       if (snapList && snapList.length > 0) {
         snapshot = snapList[0];
@@ -55,20 +51,27 @@ export async function GET() {
       };
     }
 
-    // 3. Determine if currently online
+    // 2. Determine if currently online
     let isOnline = false;
     if (heartbeat && heartbeat.ts) {
       const ageMs = Date.now() - new Date(heartbeat.ts).getTime();
       isOnline = heartbeat.mt5_connected && ageMs < 45_000;
     }
 
-    return NextResponse.json({
-      success: true,
-      is_online: isOnline,
-      heartbeat,
-      snapshot,
-      timestamp: new Date().toISOString(),
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        is_online: isOnline,
+        heartbeat,
+        snapshot,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2",
+        },
+      }
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Telemetry error";
     return NextResponse.json({ error: msg }, { status: 500 });

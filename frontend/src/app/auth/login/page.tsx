@@ -137,6 +137,11 @@ function LoginForm() {
       }
 
       if (data?.session) {
+        try {
+          localStorage.setItem("elixan_session_active", "1");
+        } catch {
+          // ignore
+        }
         setInfoMessage("Authenticated! Entering desk...");
         // Fast instant client-side router transition
         router.replace("/overview");

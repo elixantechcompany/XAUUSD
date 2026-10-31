@@ -25,24 +25,22 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Initial load
+    // Fast initial telemetry load
     syncTelemetry();
-    getLatestHeartbeat().then(h => { if (h) setHeartbeat(h); }).catch(() => {});
-    getLatestAccountSnapshot().then(a => { if (a) setAccount(a); }).catch(() => {});
-    getSignals({ limit: 50 }).then(setInitialSignals).catch(() => {});
-    getRecentCommands().then(setInitialCommands).catch(() => {});
+
+    // Background non-blocking historical queries
+    getSignals({ limit: 30 }).then(setInitialSignals).catch(() => {});
+    getRecentCommands(15).then(setInitialCommands).catch(() => {});
 
     // Active polling interval every 3.5s to ensure zero latency
     const intervalId = setInterval(syncTelemetry, 3500);
 
-    // Realtime subscriptions
-    const hbSub  = subscribeToHeartbeat(setHeartbeat);
+    // Realtime subscriptions for signals & commands
     const sigSub = subscribeToSignals(upsertSignal);
     const cmdSub = subscribeToCommandUpdates(updateCommand);
 
     return () => {
       clearInterval(intervalId);
-      hbSub.unsubscribe();
       sigSub.unsubscribe();
       cmdSub.unsubscribe();
     };
