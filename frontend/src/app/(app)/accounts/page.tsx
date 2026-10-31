@@ -20,17 +20,21 @@ import { cn } from "@/lib/utils";
 import {
   Plus, Server, Shield, Eye, EyeOff,
   CheckCircle2, AlertCircle,
-  Loader2, Zap, Power, Trash2, RefreshCw, Copy, Layers, AlertTriangle
+  Loader2, Zap, Power, Trash2, RefreshCw, Copy, Layers, AlertTriangle,
+  Check, Settings, Terminal, ArrowRightLeft
 } from "lucide-react";
 
 const EXNESS_SERVERS = [
+  "Exness-MT5Trial12",
+  "Exness-MT5Trial",
+  "Exness-MT5Trial2",
+  "Exness-MT5Trial3",
+  "Exness-MT5Trial4",
+  "Exness-MT5Demo",
   "Exness-MT5Real",
   "Exness-MT5Real2",
   "Exness-MT5Real3",
   "Exness-MT5Real10",
-  "Exness-MT5Trial",
-  "Exness-MT5Trial12",
-  "Exness-MT5Demo",
 ];
 
 interface AccountInfo {
@@ -44,6 +48,8 @@ interface AccountInfo {
   is_active: boolean;
   status: string;
   risk_multiplier?: number;
+  symbol?: string;
+  mode?: string;
 }
 
 interface CopierResponse {
@@ -85,7 +91,20 @@ export default function AccountsPage() {
   const [togglingId, setTogglingId] = useState<number | null>(null);
   const [killSwitchRunning, setKillSwitchRunning] = useState(false);
 
-  // ── Form state (Add Child Account) ─────────────────────────────────────────
+  // ── Master Account Form State (Exness Demo & Real) ────────────────────────
+  const [showMasterModal, setShowMasterModal] = useState(false);
+  const [masterLabel, setMasterLabel] = useState("Exness Demo Master");
+  const [masterLogin, setMasterLogin] = useState("");
+  const [masterPassword, setMasterPassword] = useState("");
+  const [masterServer, setMasterServer] = useState(EXNESS_SERVERS[0]); // "Exness-MT5Trial12"
+  const [masterCustomServer, setMasterCustomServer] = useState("");
+  const [masterSymbol, setMasterSymbol] = useState<"BTCUSD" | "XAUUSD">("BTCUSD");
+  const [masterMode, setMasterMode] = useState<"DEMO" | "LIVE">("DEMO");
+  const [showMasterPw, setShowMasterPw] = useState(false);
+  const [savingMaster, setSavingMaster] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
+
+  // ── Form state (Add Sub-Account) ───────────────────────────────────────────
   const [showForm, setShowForm] = useState(false);
   const [label, setLabel] = useState("");
   const [login, setLogin] = useState("");
@@ -100,6 +119,26 @@ export default function AccountsPage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const finalServer = server === "custom" ? customServer.trim() : server;
+  const finalMasterServer = masterServer === "custom" ? masterCustomServer.trim() : masterServer;
+
+  function applyPreset(type: "DEMO_BTC" | "DEMO_GOLD" | "REAL") {
+    if (type === "DEMO_BTC") {
+      setMasterServer("Exness-MT5Trial12");
+      setMasterSymbol("BTCUSD");
+      setMasterMode("DEMO");
+      setMasterLabel("Exness Demo BTC");
+    } else if (type === "DEMO_GOLD") {
+      setMasterServer("Exness-MT5Trial12");
+      setMasterSymbol("XAUUSD");
+      setMasterMode("DEMO");
+      setMasterLabel("Exness Demo Gold");
+    } else {
+      setMasterServer("Exness-MT5Real");
+      setMasterSymbol("XAUUSD");
+      setMasterMode("LIVE");
+      setMasterLabel("Exness Real Master");
+    }
+  }
 
   // ── Fetch accounts from Local Engine ─────────────────────────────────────────
   async function fetchCopierAccounts(silent = false) {
@@ -141,26 +180,28 @@ export default function AccountsPage() {
         .select("key, value")
         .like("key", "mt5_account_%");
 
-      const loaded = (data ?? []).map((row) => row.value as any).filter(Boolean);
-      const masterRow = loaded.find((a) => a.is_master || a.mode === "master") || loaded[0];
+      const loaded = (data ?? []).map((row) => ({ ...row.value, key: row.key }) as any).filter(Boolean);
+      const masterRow = loaded.find((a) => a.is_master || a.mode === "master" || a.key === "mt5_account_master") || loaded[0];
       const childRows = loaded.filter((a) => a !== masterRow);
 
       setCopierData({
         terminal_online: false,
         master: {
-          account_id: masterRow ? Number(masterRow.login) : 0,
-          label: masterRow?.label ?? "Master Account",
-          server: masterRow?.server ?? "Exness-MT5Real",
+          account_id: masterRow ? Number(masterRow.login || masterRow.account_id) : 0,
+          label: masterRow?.label ?? (masterRow?.account_id ? `Exness ${masterRow.mode || "Demo"} #${masterRow.account_id}` : "Exness Master Terminal"),
+          server: masterRow?.server ?? "Exness-MT5Trial12",
           balance: 0.0,
           equity: 0.0,
           margin_free: 0.0,
           is_master: true,
           is_active: true,
-          status: "SAVED (ENGINE OFFLINE)",
+          status: masterRow?.account_id ? "SAVED (READY FOR DEMO)" : "NOT CONFIGURED",
+          symbol: masterRow?.symbol ?? "BTCUSD",
+          mode: masterRow?.mode ?? "DEMO",
         },
         children: childRows.map((c) => ({
-          account_id: Number(c.login),
-          label: c.label ?? `Child #${c.login}`,
+          account_id: Number(c.login || c.account_id),
+          label: c.label ?? `Sub-Account #${c.login || c.account_id}`,
           server: c.server ?? "Exness-MT5Real",
           balance: 0.0,
           equity: 0.0,
@@ -176,6 +217,122 @@ export default function AccountsPage() {
     } catch {
       // ignore
     }
+  }
+
+  async function handleConfigureMaster(e: FormEvent) {
+    e.preventDefault();
+    if (!masterLogin || !masterPassword) {
+      return setError("Please provide your Exness account number and trading password.");
+    }
+    const acctId = parseInt(masterLogin, 10);
+    if (isNaN(acctId)) {
+      return setError("Exness Account Number / MT5 Login must be numeric.");
+    }
+
+    setSavingMaster(true);
+    setError(null);
+
+    try {
+      // 1. Send securely to local engine if running -> Windows Credential Manager
+      await fetch(`${engineApiUrl}/copier/master`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: acctId,
+          password: masterPassword,
+          server: finalMasterServer,
+          label: masterLabel || `Exness ${masterMode} #${acctId}`,
+          symbol: masterSymbol,
+          mode: masterMode,
+        }),
+      }).catch(() => null);
+
+      // 2. Persist master account configuration into Supabase settings
+      await getSupabaseClient()
+        .from("settings")
+        .upsert(
+          {
+            key: "mt5_account_master",
+            value: {
+              account_id: acctId,
+              login: acctId.toString(),
+              label: masterLabel || `Exness ${masterMode} #${acctId}`,
+              server: finalMasterServer,
+              symbol: masterSymbol,
+              mode: masterMode,
+              is_master: true,
+              is_active: true,
+              updated_at: new Date().toISOString(),
+            },
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
+
+      // 3. Persist active symbol
+      await getSupabaseClient()
+        .from("settings")
+        .upsert(
+          {
+            key: "mt5_active_symbol",
+            value: { symbol: masterSymbol },
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
+
+      setSuccess(`Exness ${masterMode} Account #${acctId} configured for ${masterSymbol}! Run the engine command on your laptop to start testing.`);
+      setShowMasterModal(false);
+      setMasterPassword("");
+      await fetchCopierAccounts(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to configure Master Account.");
+    } finally {
+      setSavingMaster(false);
+    }
+  }
+
+  async function handleQuickSwitchSymbol(target: "BTCUSD" | "XAUUSD") {
+    try {
+      const currentMaster = copierData?.master;
+      if (currentMaster?.account_id) {
+        await getSupabaseClient()
+          .from("settings")
+          .upsert(
+            {
+              key: "mt5_account_master",
+              value: {
+                ...currentMaster,
+                symbol: target,
+                updated_at: new Date().toISOString(),
+              },
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "key" }
+          );
+      }
+      await getSupabaseClient()
+        .from("settings")
+        .upsert(
+          {
+            key: "mt5_active_symbol",
+            value: { symbol: target },
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
+      setSuccess(`Active target asset switched to ${target}!`);
+      await fetchCopierAccounts(true);
+    } catch {
+      setError("Failed to switch target asset.");
+    }
+  }
+
+  function copyCliCommand(cmd: string) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      setCopiedCmd(true);
+      setTimeout(() => setCopiedCmd(false), 2500);
+    });
   }
 
   useEffect(() => {
@@ -349,6 +506,14 @@ export default function AccountsPage() {
             <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin text-accent")} />
           </button>
 
+          <button
+            onClick={() => { applyPreset("DEMO_BTC"); setShowMasterModal(true); setSuccess(null); }}
+            className="flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black text-sm font-bold px-4 py-2.5 rounded-inner transition-all shadow-sm active:scale-95 min-h-[44px]"
+          >
+            <Server className="w-4 h-4" />
+            Connect Exness Demo (BTC)
+          </button>
+
           {!showForm && (
             <button
               onClick={() => { setShowForm(true); setSuccess(null); }}
@@ -456,6 +621,199 @@ export default function AccountsPage() {
           <AlertCircle className="w-5 h-5 shrink-0" />
           <span>{error}</span>
         </div>
+      )}
+
+      {/* ── Master Exness Account Configuration Modal ── */}
+      {showMasterModal && (
+        <section className="bg-surface border-2 border-amber-500/40 rounded-card overflow-hidden shadow-2xl">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-gradient-to-r from-amber-500/15 via-surface-2 to-surface-2">
+            <div className="flex items-center gap-2">
+              <Server className="w-5 h-5 text-amber-400" />
+              <div>
+                <h2 className="text-sm font-bold text-text-primary">
+                  Configure Primary Exness MT5 Master Account
+                </h2>
+                <p className="text-[11px] text-text-secondary">
+                  Authorize autonomous execution on Demo or Live for BTCUSD &amp; XAUUSD
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { setShowMasterModal(false); setError(null); }}
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors px-2 py-1"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {/* Quick Presets */}
+            <div className="flex flex-wrap items-center gap-2 pb-1 border-b border-border">
+              <span className="text-xs text-text-secondary font-medium">Quick Presets:</span>
+              <button
+                type="button"
+                onClick={() => applyPreset("DEMO_BTC")}
+                className={cn(
+                  "px-3 py-1 text-xs font-semibold rounded-inner border transition-all",
+                  masterMode === "DEMO" && masterSymbol === "BTCUSD"
+                    ? "bg-amber-500/20 text-amber-400 border-amber-500/50"
+                    : "bg-surface-2 text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                ● Test on Demo (BTC)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPreset("DEMO_GOLD")}
+                className={cn(
+                  "px-3 py-1 text-xs font-semibold rounded-inner border transition-all",
+                  masterMode === "DEMO" && masterSymbol === "XAUUSD"
+                    ? "bg-amber-500/20 text-amber-400 border-amber-500/50"
+                    : "bg-surface-2 text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                ● Test on Demo (Gold)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyPreset("REAL")}
+                className={cn(
+                  "px-3 py-1 text-xs font-semibold rounded-inner border transition-all",
+                  masterMode === "LIVE"
+                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
+                    : "bg-surface-2 text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                ● Real Live Account
+              </button>
+            </div>
+
+            <div className="bg-surface-2 border border-border rounded-inner p-3 flex items-start gap-2.5 text-xs text-text-secondary">
+              <Shield className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>
+                <strong>Zero Cloud Plaintext:</strong> Your Exness MT5 password is saved into Windows Credential Manager on your local laptop. Only non-sensitive parameters (Account Login, Server, and Symbol) are saved to Supabase to enable remote monitoring.
+              </span>
+            </div>
+
+            <form onSubmit={handleConfigureMaster} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field id="master-mode" label="Account Type / Mode">
+                  <select
+                    id="master-mode"
+                    value={masterMode}
+                    onChange={(e) => setMasterMode(e.target.value as "DEMO" | "LIVE")}
+                    className={inputCls}
+                  >
+                    <option value="DEMO">Demo / Trial Account (Zero Financial Risk)</option>
+                    <option value="LIVE">Real Account (Live Broker Trading)</option>
+                  </select>
+                </Field>
+
+                <Field id="master-symbol" label="Target Trading Asset">
+                  <select
+                    id="master-symbol"
+                    value={masterSymbol}
+                    onChange={(e) => setMasterSymbol(e.target.value as "BTCUSD" | "XAUUSD")}
+                    className={inputCls}
+                  >
+                    <option value="BTCUSD">BTCUSD (Bitcoin) — 24/7 Continuous Liquidity</option>
+                    <option value="XAUUSD">XAUUSD (Gold) — London / New York Overlap</option>
+                  </select>
+                </Field>
+
+                <Field id="master-login" label="Exness MT5 Login / Account Number" hint="Numeric account number provided by Exness (e.g. 24589102)">
+                  <input
+                    id="master-login"
+                    type="text"
+                    value={masterLogin}
+                    onChange={(e) => setMasterLogin(e.target.value)}
+                    required
+                    placeholder="e.g. 24589102"
+                    className={inputCls}
+                  />
+                </Field>
+
+                <Field id="master-password" label="Exness MT5 Trading Password" hint="Never logged or exposed in plaintext">
+                  <div className="relative">
+                    <input
+                      id="master-password"
+                      type={showMasterPw ? "text" : "password"}
+                      value={masterPassword}
+                      onChange={(e) => setMasterPassword(e.target.value)}
+                      required
+                      placeholder="Enter MT5 Trading Password"
+                      className={cn(inputCls, "pr-10")}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowMasterPw(!showMasterPw)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary"
+                    >
+                      {showMasterPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </Field>
+
+                <Field id="master-server" label="Exness Server" hint="Select your broker server (e.g. Exness-MT5Trial12 for Demo)">
+                  <select
+                    id="master-server"
+                    value={masterServer}
+                    onChange={(e) => setMasterServer(e.target.value)}
+                    className={inputCls}
+                  >
+                    {EXNESS_SERVERS.map((srv) => (
+                      <option key={srv} value={srv}>
+                        {srv} {srv.includes("Trial") || srv.includes("Demo") ? "(Demo / Paper)" : "(Real)"}
+                      </option>
+                    ))}
+                    <option value="custom">Custom Server...</option>
+                  </select>
+                </Field>
+
+                {masterServer === "custom" ? (
+                  <Field id="master-custom-server" label="Custom Server Name">
+                    <input
+                      id="master-custom-server"
+                      type="text"
+                      value={masterCustomServer}
+                      onChange={(e) => setMasterCustomServer(e.target.value)}
+                      placeholder="e.g. Exness-MT5Trial15"
+                      className={inputCls}
+                    />
+                  </Field>
+                ) : (
+                  <Field id="master-label" label="Account Label / Tag">
+                    <input
+                      id="master-label"
+                      type="text"
+                      value={masterLabel}
+                      onChange={(e) => setMasterLabel(e.target.value)}
+                      placeholder="e.g. Exness Demo BTC"
+                      className={inputCls}
+                    />
+                  </Field>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMasterModal(false)}
+                  className="px-4 py-2.5 rounded-inner border border-border text-text-secondary text-sm hover:text-text-primary min-h-[44px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingMaster}
+                  className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 disabled:opacity-50 text-black font-bold rounded-inner text-sm flex items-center gap-2 min-h-[44px] shadow-md"
+                >
+                  {savingMaster ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save & Authorize Master Engine"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
       )}
 
       {/* ── Link Sub-Account Form ── */}
@@ -610,12 +968,18 @@ export default function AccountsPage() {
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-gold" />
             <h2 className="text-sm font-semibold text-text-primary uppercase tracking-wider">
-              1. Master Terminal (Signal Generator)
+              1. Master Terminal (Signal Generator &amp; Execution)
             </h2>
           </div>
-          <span className="text-xs text-text-secondary">
-            Keep open on your laptop
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setShowMasterModal(true); setSuccess(null); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 text-amber-400 font-semibold rounded-inner text-xs transition-all"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              {master?.account_id ? "Configure Credentials" : "Add Exness Demo Account"}
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -623,8 +987,33 @@ export default function AccountsPage() {
             <Skeleton className="h-5 w-48 mb-3" />
             <Skeleton className="h-4 w-72" />
           </div>
+        ) : !master?.account_id ? (
+          <div className="bg-gradient-to-r from-amber-500/10 via-surface to-surface border-2 border-amber-500/30 rounded-card p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-inner bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <Server className="w-6 h-6 text-amber-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-white">Connect Primary Exness Demo (BTCUSD)</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase">
+                    Ready to Test
+                  </span>
+                </div>
+                <p className="text-xs text-text-secondary mt-1 max-w-xl">
+                  Add your Exness MT5 demo credentials to test the quantitative bot on BTCUSD. The password is saved directly into Windows Credential Manager on your laptop with zero cloud exposure.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => { applyPreset("DEMO_BTC"); setShowMasterModal(true); }}
+              className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black font-bold text-sm rounded-inner shrink-0 shadow-md active:scale-95"
+            >
+              Connect Exness Demo Account
+            </button>
+          </div>
         ) : (
-          <div className="bg-surface border-2 border-gold/40 rounded-card p-5 relative overflow-hidden">
+          <div className="bg-surface border-2 border-gold/40 rounded-card p-5 relative overflow-hidden space-y-4">
             <div className="absolute top-0 right-0 px-3 py-1 bg-gold/15 text-gold text-[11px] font-bold rounded-bl-inner border-l border-b border-gold/30 uppercase tracking-wider">
               Master Terminal Window
             </div>
@@ -635,16 +1024,24 @@ export default function AccountsPage() {
                   <Server className="w-5 h-5 text-gold" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="text-base font-bold text-text-primary">
                       {master?.label || "Exness Master Account"}
                     </h3>
-                    <span className="px-2 py-0.5 bg-profit/10 border border-profit/20 text-profit text-[10px] font-bold rounded-full uppercase">
-                      {master?.status || "CONNECTED"}
+                    <span className={cn(
+                      "px-2 py-0.5 text-[10px] font-bold rounded-full uppercase",
+                      copierData?.terminal_online
+                        ? "bg-profit/10 border border-profit/20 text-profit"
+                        : "bg-amber-500/10 border border-amber-500/20 text-amber-400"
+                    )}>
+                      {copierData?.terminal_online ? "TERMINAL ONLINE" : master?.status || "READY FOR DEMO"}
+                    </span>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-surface-2 text-text-secondary border border-border">
+                      {master?.mode || "DEMO"}
                     </span>
                   </div>
-                  <p className="text-xs text-text-secondary mt-0.5">
-                    Account: <strong>{master?.account_id || "Exness"}</strong> · Server: <strong>{master?.server}</strong>
+                  <p className="text-xs text-text-secondary mt-1">
+                    Account: <strong className="text-text-primary">{master?.account_id}</strong> · Server: <strong>{master?.server}</strong> · Asset: <strong className="text-accent">{master?.symbol || "BTCUSD"}</strong>
                   </p>
                 </div>
               </div>
@@ -669,6 +1066,50 @@ export default function AccountsPage() {
                     ${(master?.margin_free ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
                   </span>
                 </div>
+              </div>
+            </div>
+
+            {/* Quick Controls: Symbol Toggle & CLI Launch Snippet */}
+            <div className="pt-3 border-t border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-text-secondary font-medium">Target Asset:</span>
+                <button
+                  onClick={() => handleQuickSwitchSymbol("BTCUSD")}
+                  className={cn(
+                    "px-2.5 py-1 rounded text-xs font-semibold border transition-all",
+                    (master?.symbol || "BTCUSD") === "BTCUSD"
+                      ? "bg-accent/20 border-accent text-accent font-bold"
+                      : "bg-surface-2 border-border text-text-secondary hover:text-text-primary"
+                  )}
+                >
+                  BTCUSD (Bitcoin)
+                </button>
+                <button
+                  onClick={() => handleQuickSwitchSymbol("XAUUSD")}
+                  className={cn(
+                    "px-2.5 py-1 rounded text-xs font-semibold border transition-all",
+                    master?.symbol === "XAUUSD"
+                      ? "bg-gold/20 border-gold text-gold font-bold"
+                      : "bg-surface-2 border-border text-text-secondary hover:text-text-primary"
+                  )}
+                >
+                  XAUUSD (Gold)
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="bg-surface-2 border border-border px-2.5 py-1 rounded font-mono text-[11px] text-text-secondary flex items-center gap-1.5">
+                  <Terminal className="w-3.5 h-3.5 text-accent" />
+                  <span>python main.py --mode {(master?.mode || "demo").toLowerCase()} --symbol {master?.symbol || "BTCUSD"}</span>
+                </div>
+                <button
+                  onClick={() => copyCliCommand(`python main.py --mode ${(master?.mode || "demo").toLowerCase()} --symbol ${master?.symbol || "BTCUSD"}`)}
+                  className="px-2.5 py-1 rounded border border-border bg-surface-2 hover:bg-surface-2/80 text-text-primary font-semibold text-[11px] flex items-center gap-1"
+                  title="Copy engine launch command"
+                >
+                  {copiedCmd ? <Check className="w-3.5 h-3.5 text-profit" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedCmd ? "Copied" : "Copy"}</span>
+                </button>
               </div>
             </div>
           </div>

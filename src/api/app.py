@@ -567,6 +567,40 @@ def list_orders(
 
 # ── Multi-Account Copier Endpoints ──────────────────────────────────────────
 
+class ConfigureMasterRequest(BaseModel):
+    account_id: int
+    password: str
+    server: str
+    label: str = "Primary Exness Account"
+    symbol: str = "BTCUSD"
+    mode: str = "DEMO"
+
+
+@app.post("/copier/master", tags=["Copier"])
+def configure_master_account(req: ConfigureMasterRequest):
+    """Securely store Primary Exness Master account into Windows Credential Manager."""
+    stored = cred_mgr.store_credentials(
+        account_id=req.account_id,
+        password=req.password,
+        server=req.server,
+    )
+    if not stored:
+        raise HTTPException(status_code=500, detail="Failed to store master credentials in Credential Manager.")
+
+    master_creds = cred_mgr.get_credentials()
+    if master_creds:
+        master_executor.credentials = master_creds
+
+    return {
+        "status": "ok",
+        "message": f"Primary Exness account {req.account_id} configured successfully on {req.server} for {req.symbol}.",
+        "account_id": req.account_id,
+        "server": req.server,
+        "symbol": req.symbol,
+        "mode": req.mode,
+    }
+
+
 class AddChildAccountRequest(BaseModel):
     account_id: int
     password: str
