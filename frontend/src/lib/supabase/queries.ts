@@ -127,6 +127,27 @@ export async function getTrades(filters?: {
   open_only?: boolean;
   limit?: number;
 }): Promise<Trade[]> {
+  if (typeof window !== "undefined") {
+    try {
+      const url = new URL("/api/trades/list", window.location.origin);
+      if (filters?.limit) url.searchParams.set("limit", String(filters.limit));
+      if (filters?.instrument) url.searchParams.set("instrument", filters.instrument);
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.trades) {
+          let list: Trade[] = json.trades;
+          if (filters?.open_only) {
+            list = list.filter((t) => !t.close_time);
+          }
+          return list;
+        }
+      }
+    } catch {
+      // fallback to direct client
+    }
+  }
+
   let q = getSupabaseClient()
     .from("trades")
     .select("*")

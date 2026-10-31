@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
             bot_state: val.bot_state || "ANALYZING",
             reasoning: val.reasoning || "Autonomous quantitative SMC analysis active.",
             updated_at: val.updated_at || rows[0].updated_at,
+            open_positions: val.open_positions || [],
             data: symData,
           },
           {
@@ -55,6 +56,7 @@ export async function GET(request: NextRequest) {
       bot_state: "ANALYZING",
       reasoning: "Scanning H1 Market Structure and Fair Value Gaps via MT5 IPC.",
       updated_at: new Date().toISOString(),
+      open_positions: [],
       data: null,
     });
   } catch (err: unknown) {

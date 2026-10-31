@@ -176,6 +176,150 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
     }
 
 
+def determine_filling_type(mt5, symbol_name: str) -> int:
+    info = mt5.symbol_info(symbol_name)
+    if info is None:
+        return mt5.ORDER_FILLING_IOC
+    modes = info.filling_mode
+    if modes & 1:
+        return mt5.ORDER_FILLING_FOK
+    elif modes & 2:
+        return mt5.ORDER_FILLING_IOC
+    return mt5.ORDER_FILLING_RETURN
+
+
+def execute_smc_order(mt5, supabase, broker_symbol: str, base_asset: str, direction: str, volume: float, sl: float, tp: float, reason="SMC Confirmation 1:3 RR"):
+    """
+    Submits deal order with attached SL and 1:3 RR TP to MT5 and writes to Supabase trades and signals.
+    """
+    mt5.symbol_select(broker_symbol, True)
+    tick = mt5.symbol_info_tick(broker_symbol)
+    if not tick:
+        return False, f"Could not fetch tick for {broker_symbol}"
+
+    is_buy = direction.upper() in ("BUY", "BULLISH")
+    order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+    price = tick.ask if is_buy else tick.bid
+    filling = determine_filling_type(mt5, broker_symbol)
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": broker_symbol,
+        "volume": float(volume),
+        "type": order_type,
+        "price": float(price),
+        "sl": float(sl),
+        "tp": float(tp),
+        "deviation": 30,
+        "magic": 101001,
+        "comment": "SMC_1_3_AUTO"[:31],
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": filling,
+    }
+
+    res = mt5.order_send(request)
+    if res is None:
+        return False, f"order_send failed: {mt5.last_error()}"
+
+    if res.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+        return False, f"Broker rejected order: {res.comment} (code={res.retcode})"
+
+    ticket_str = str(res.order)
+    sig_id = f"sig_{base_asset.lower()}_{ticket_str}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    print("\n" + "=" * 65)
+    print(f"  [TRADE PLACED] {base_asset} {direction} {volume} LOTS (Ticket #{ticket_str})")
+    print(f"  Entry: {res.price} | Stop Loss: {sl} | Take Profit: {tp} (1:3 RR)")
+    print("=" * 65 + "\n")
+
+    # Save to Supabase signals
+    try:
+        supabase.table("signals").upsert({
+            "id": sig_id,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "instrument": base_asset,
+            "timeframe": "H1",
+            "direction": "BULLISH" if is_buy else "BEARISH",
+            "state": "POSITION_OPEN",
+            "status": "taken",
+            "entry": float(res.price),
+            "stop_loss": float(sl),
+            "take_profit": float(tp),
+            "suggested_lot_size": float(volume),
+            "estimated_risk_usd": round(abs(float(res.price) - float(sl)) * float(volume) * (100 if "XAU" in base_asset else 1), 2),
+            "rr_ratio": 3.0,
+            "rejection_reason": reason,
+            "strategy_version": "1.0",
+        }).execute()
+    except Exception as e:
+        print(f"[WARN] Signal insert error: {e}")
+
+    # Save to Supabase trades
+    try:
+        supabase.table("trades").upsert({
+            "ticket": ticket_str,
+            "signal_id": sig_id,
+            "source": "bot",
+            "instrument": base_asset,
+            "side": "BULLISH" if is_buy else "BEARISH",
+            "lots": float(volume),
+            "open_time": now_iso,
+            "open_price": float(res.price),
+            "sl": float(sl),
+            "tp": float(tp),
+            "execution_mode": "demo",
+            "pnl": 0.0,
+        }).execute()
+    except Exception as e:
+        print(f"[WARN] Trade insert error: {e}")
+
+    return True, f"Ticket #{ticket_str} placed successfully on Exness MT5"
+
+
+def close_position_mt5(mt5, supabase, ticket=None, symbol_name=None):
+    """Liquidates matching active positions on MT5."""
+    positions = mt5.positions_get(ticket=int(ticket)) if ticket else mt5.positions_get(symbol=symbol_name) if symbol_name else mt5.positions_get()
+    if not positions:
+        return False, "No active positions found"
+
+    closed = 0
+    for p in positions:
+        tick = mt5.symbol_info_tick(p.symbol)
+        if not tick:
+            continue
+        order_type = mt5.ORDER_TYPE_SELL if p.type == 0 else mt5.ORDER_TYPE_BUY
+        price = tick.bid if p.type == 0 else tick.ask
+        req = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "position": p.ticket,
+            "symbol": p.symbol,
+            "volume": p.volume,
+            "type": order_type,
+            "price": price,
+            "deviation": 30,
+            "magic": 101001,
+            "comment": "CLOSE_SMC",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": determine_filling_type(mt5, p.symbol),
+        }
+        res = mt5.order_send(req)
+        if res and res.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+            closed += 1
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                supabase.table("trades").update({
+                    "close_time": now_iso,
+                    "close_price": float(res.price),
+                    "pnl": round(float(p.profit), 2),
+                }).eq("ticket", str(p.ticket)).execute()
+            except Exception:
+                pass
+
+    return True, f"Closed {closed} open position(s)"
+
+
 def connect_terminal(args):
     try:
         import MetaTrader5 as mt5
@@ -272,6 +416,7 @@ def main():
     print("[4/4] Starting continuous live telemetry & SMC market publisher...")
     last_cleanup = time.time()
     last_snapshot = 0.0
+    last_auto_trade = time.time()  # Start with cooldown so it doesn't duplicate existing positions
     heartbeat_count = 0
 
     try:
@@ -287,6 +432,37 @@ def main():
 
             active_setup = btc_setup if symbol == "BTCUSD" else xau_setup
 
+            # Extract active open positions from MT5
+            positions = mt5.positions_get() or ()
+            active_positions_data = []
+            for p in positions:
+                pos_item = {
+                    "ticket": str(p.ticket),
+                    "symbol": p.symbol,
+                    "direction": "BUY" if p.type == 0 else "SELL",
+                    "volume": float(p.volume),
+                    "price_open": float(p.price_open),
+                    "price_current": float(p.price_current),
+                    "sl": float(p.sl),
+                    "tp": float(p.tp),
+                    "profit": round(float(p.profit), 2),
+                    "comment": str(p.comment),
+                }
+                active_positions_data.append(pos_item)
+
+                # Keep live PnL in Supabase trades table updated
+                try:
+                    supabase.table("trades").update({
+                        "pnl": pos_item["profit"],
+                    }).eq("ticket", pos_item["ticket"]).execute()
+                except Exception:
+                    pass
+
+            has_active_pos = len(positions) > 0
+            live_bot_status = f"BOT RUNNING · TRADE ACTIVE #{positions[0].ticket} ({positions[0].symbol})" if has_active_pos else active_setup["status_label"]
+            live_bot_state = "POSITION_OPEN" if has_active_pos else active_setup["status_state"]
+            live_bot_reasoning = f"Position #{positions[0].ticket} active on {positions[0].symbol}. 1:3 RR target at {positions[0].tp}." if has_active_pos else active_setup["reasoning"]
+
             # 1. Publish Live Market & SMC Data into Supabase settings
             try:
                 supabase.table("settings").upsert({
@@ -294,9 +470,10 @@ def main():
                     "value": {
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                         "active_symbol": symbol,
-                        "bot_status": active_setup["status_label"],
-                        "bot_state": active_setup["status_state"],
-                        "reasoning": active_setup["reasoning"],
+                        "bot_status": live_bot_status,
+                        "bot_state": live_bot_state,
+                        "reasoning": live_bot_reasoning,
+                        "open_positions": active_positions_data,
                         "BTCUSD": btc_setup,
                         "XAUUSD": xau_setup,
                     },
@@ -326,7 +503,7 @@ def main():
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "equity": float(curr_info.equity),
                         "balance": float(curr_info.balance),
-                        "open_positions_count": mt5.positions_total() or 0,
+                        "open_positions_count": len(positions),
                         "daily_pnl": round(float(curr_info.equity - curr_info.balance), 2),
                         "drawdown_pct": 0.0,
                         "execution_mode": mode.lower(),
@@ -339,34 +516,76 @@ def main():
             if heartbeat_count % 6 == 0 or heartbeat_count == 1:
                 print(
                     f"[{datetime.now().strftime('%H:%M:%S')}] Live #{heartbeat_count} | "
-                    f"Equity: ${curr_info.equity:,.2f} | "
+                    f"Equity: ${curr_info.equity:,.2f} | Positions: {len(positions)} | "
                     f"BTC: {btc_setup['bid']} | Gold: {xau_setup['bid']} | "
-                    f"Status: {active_setup['status_state']}"
+                    f"Status: {live_bot_state}"
                 )
 
-            # Check for commands in Supabase
+            # 4. Check for remote commands from web dashboard
             try:
                 cmd_res = (
                     supabase.table("commands")
                     .select("*")
                     .eq("status", "pending")
-                    .limit(3)
+                    .limit(5)
                     .execute()
                 )
                 if cmd_res.data:
                     for cmd in cmd_res.data:
                         cmd_id = cmd.get("id")
                         cmd_type = cmd.get("type")
+                        payload = cmd.get("payload") or {}
                         print(f"[COMMAND] Received {cmd_type} (ID: {cmd_id})")
-                        if cmd_type == "CONFIGURE_MASTER" and cmd.get("payload", {}).get("symbol"):
-                            symbol = cmd["payload"]["symbol"]
+
+                        res_msg = "Acknowledged by MT5 Bridge"
+                        if cmd_type == "CONFIGURE_MASTER" and payload.get("symbol"):
+                            symbol = payload["symbol"].upper()
+                            res_msg = f"Master active symbol set to {symbol}"
+                        elif cmd_type == "EXECUTE_TRADE":
+                            req_sym = payload.get("symbol", symbol).upper()
+                            req_base = "BTCUSD" if "BTC" in req_sym else "XAUUSD"
+                            req_broker = btc_sym if req_base == "BTCUSD" else xau_sym
+                            req_setup = btc_setup if req_base == "BTCUSD" else xau_setup
+                            req_dir = payload.get("direction") or ("SELL" if req_setup["stop_loss"] > req_setup["entry_price"] else "BUY")
+                            req_vol = float(payload.get("volume", 0.01))
+                            req_sl = float(payload.get("stop_loss", req_setup["stop_loss"]))
+                            req_tp = float(payload.get("take_profit", req_setup["take_profit"]))
+                            ok, res_msg = execute_smc_order(
+                                mt5, supabase, req_broker, req_base, req_dir, req_vol, req_sl, req_tp,
+                                reason=payload.get("reason", "Manual Web Dispatch 1:3 RR")
+                            )
+                        elif cmd_type in ("CLOSE_TRADE", "CLOSE_ALL", "KILL"):
+                            t_id = payload.get("ticket")
+                            s_name = payload.get("symbol")
+                            ok, res_msg = close_position_mt5(mt5, supabase, ticket=t_id, symbol_name=s_name)
+
                         supabase.table("commands").update({
                             "status": "done",
                             "acked_at": datetime.now(timezone.utc).isoformat(),
-                            "result": f"Executed by MT5 bridge",
+                            "result": str(res_msg),
                         }).eq("id", cmd_id).execute()
-            except Exception:
+            except Exception as e:
                 pass
+
+            # 5. Autonomous SMC Quantitative Trade Execution
+            # When no positions are active, execute the marked 1:3 RR setup automatically
+            if len(positions) == 0 and (time.time() - last_auto_trade > 180):
+                auto_broker = btc_sym if symbol == "BTCUSD" else xau_sym
+                auto_base = symbol
+                auto_setup = btc_setup if symbol == "BTCUSD" else xau_setup
+
+                auto_dir = "SELL" if auto_setup["stop_loss"] > auto_setup["entry_price"] else "BUY"
+                auto_sl = float(auto_setup["stop_loss"])
+                auto_tp = float(auto_setup["take_profit"])  # Exact 1:3 RR!
+                auto_vol = 0.01
+
+                print(f"[AUTO-SMC] Setup ready on {auto_base}. Placing {auto_dir} order ({auto_vol} lot, 1:3 RR)...")
+                ok, res_msg = execute_smc_order(
+                    mt5, supabase, auto_broker, auto_base, auto_dir, auto_vol, auto_sl, auto_tp,
+                    reason="Autonomous SMC Displacement & 1:3 RR Target"
+                )
+                print(f"[AUTO-SMC] Execution result: {res_msg}")
+                last_auto_trade = time.time()
 
             # Prune old heartbeats every 10 min
             if time.time() - last_cleanup > 600:

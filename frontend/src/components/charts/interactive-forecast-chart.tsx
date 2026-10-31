@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { formatPrice, cn } from "@/lib/utils";
 import { useBotStore } from "@/lib/store";
+import { TradingViewLiveChart } from "./tradingview-live-chart";
 
 interface Candle {
   time: string;
@@ -55,6 +56,7 @@ export function InteractiveForecastChart({
   const account = useBotStore((s) => s.account);
 
   const [instrument, setInstrument] = useState<"XAUUSD" | "BTCUSD">(initialInstrument);
+  const [chartViewMode, setChartViewMode] = useState<"tradingview" | "smc_matrix">("tradingview");
   const [activeStep, setActiveStep] = useState<SmcStep>("ALL");
   const [isPlayingCycle, setIsPlayingCycle] = useState(false);
   const [activeTab, setActiveTab] = useState<"calculator" | "reasons" | "macro" | "simulator">("calculator");
@@ -71,6 +73,10 @@ export function InteractiveForecastChart({
   const [liveReasoning, setLiveReasoning] = useState<string>("Scanning H1 bar structure for liquidity sweep and cyan Fair Value Gap.");
   const [lastDataUpdate, setLastDataUpdate] = useState<string>(new Date().toLocaleTimeString());
   const [isLiveLoading, setIsLiveLoading] = useState(false);
+  const [openPositions, setOpenPositions] = useState<any[]>([]);
+  const [isExecutingTrade, setIsExecutingTrade] = useState(false);
+  const [isClosingTrade, setIsClosingTrade] = useState(false);
+  const [actionToast, setActionToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   // Theme state
   const [isDark, setIsDark] = useState(true);
@@ -101,6 +107,9 @@ export function InteractiveForecastChart({
       const res = await fetch(`/api/market/live?symbol=${instrument}`, { cache: "no-store" });
       if (res.ok) {
         const json = await res.json();
+        if (json.open_positions) {
+          setOpenPositions(json.open_positions);
+        }
         if (json.data) {
           const d = json.data;
           if (d.candles && d.candles.length > 0) {
@@ -295,6 +304,81 @@ export function InteractiveForecastChart({
     }
   }
 
+  // ── 1-Click MT5 Trade Execution & Close Handlers (1:3 RR) ──────────────────
+  const handleExecuteTrade = async () => {
+    setIsExecutingTrade(true);
+    setActionToast(null);
+    try {
+      const res = await fetch("/api/trade/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: instrument,
+          direction: direction,
+          volume: calculatedLotSize,
+          stop_loss: initialSl,
+          take_profit: targetTp,
+          rr_ratio: 3.0,
+          reason: `SMC FVG Retracement Confirmation (1:3 RR, SL: ${initialSl}, TP: ${targetTp})`,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setActionToast({
+          message: `Trade dispatched to Exness MT5! Ticket fill pending (${direction} ${calculatedLotSize} lot, 1:3 RR)`,
+          type: "success",
+        });
+        setTimeout(fetchLiveMarketData, 1200);
+      } else {
+        setActionToast({ message: json.error || "Failed to dispatch order to MT5", type: "error" });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Execution network error";
+      setActionToast({ message: msg, type: "error" });
+    } finally {
+      setIsExecutingTrade(false);
+    }
+  };
+
+  const handleCloseTrade = async (ticketToClose?: string) => {
+    setIsClosingTrade(true);
+    setActionToast(null);
+    try {
+      const res = await fetch("/api/trade/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticket: ticketToClose,
+          symbol: instrument,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setActionToast({
+          message: json.message || "Close order dispatched to Exness MT5 bridge",
+          type: "success",
+        });
+        setTimeout(fetchLiveMarketData, 1200);
+      } else {
+        setActionToast({ message: json.error || "Failed to close trade", type: "error" });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Close error";
+      setActionToast({ message: msg, type: "error" });
+    } finally {
+      setIsClosingTrade(false);
+    }
+  };
+
+  // Find active position on MT5 for this instrument or general
+  const activePosition = openPositions.find(
+    (p) =>
+      p.symbol === instrument ||
+      p.symbol === `${instrument}m` ||
+      (instrument === "BTCUSD" && p.symbol.includes("BTC")) ||
+      (instrument === "XAUUSD" && (p.symbol.includes("XAU") || p.symbol.includes("GOLD")))
+  ) || (openPositions.length > 0 ? openPositions[0] : null);
+
   return (
     <div className="bg-surface border border-border rounded-card overflow-hidden shadow-sm transition-colors duration-200">
       {/* ── 1. Prominent Live Quantitative Bot Activity & Radar Strip ── */}
@@ -361,8 +445,39 @@ export function InteractiveForecastChart({
           </div>
         </div>
 
-        {/* Instrument Switcher & Live Price Readout */}
-        <div className="flex items-center gap-2">
+        {/* Chart View Switcher + Instrument Switcher */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* View Mode Toggle: Interactive TradingView Chart vs SMC Matrix */}
+          <div className="flex items-center bg-surface-2 p-1 rounded-inner border border-border">
+            <button
+              type="button"
+              onClick={() => setChartViewMode("tradingview")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded transition-all",
+                chartViewMode === "tradingview"
+                  ? "bg-accent text-white shadow-xs"
+                  : "text-text-secondary hover:text-text-primary"
+              )}
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+              <span>📈 Live TradingView Chart</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartViewMode("smc_matrix")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded transition-all",
+                chartViewMode === "smc_matrix"
+                  ? "bg-gold text-black shadow-xs font-black"
+                  : "text-text-secondary hover:text-text-primary"
+              )}
+            >
+              <Target className="w-3.5 h-3.5" />
+              <span>🎯 SMC Forecast Matrix (Image 1)</span>
+            </button>
+          </div>
+
+          {/* Instrument Switcher & Live Price Readout */}
           <div className="flex items-center bg-surface-2 p-1 rounded-inner border border-border">
             <button
               onClick={() => setInstrument("BTCUSD")}
@@ -390,8 +505,105 @@ export function InteractiveForecastChart({
         </div>
       </div>
 
-      {/* ── 3. Step Controller Toolbar ── */}
-      <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-border overflow-x-auto no-scrollbar gap-2">
+      {/* ── 2B. Prominent Active MT5 Position & 1:3 RR Execution Action Banner ── */}
+      <div className="p-4 bg-surface-2 border-b border-border">
+        {actionToast && (
+          <div className={cn(
+            "mb-3 px-3.5 py-2 rounded text-xs font-semibold flex items-center justify-between border",
+            actionToast.type === "success"
+              ? "bg-profit/10 border-profit/30 text-profit"
+              : "bg-loss/10 border-loss/30 text-loss"
+          )}>
+            <span>{actionToast.message}</span>
+            <button onClick={() => setActionToast(null)} className="underline text-[11px] ml-2">Dismiss</button>
+          </div>
+        )}
+
+        {activePosition ? (
+          <div className="bg-surface border border-emerald-500/50 rounded-card p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="relative flex h-3 w-3 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-extrabold text-emerald-400 text-xs tracking-wide uppercase">
+                      LIVE ORDER ACTIVE ON EXNESS MT5: #{activePosition.ticket}
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 font-mono">
+                      {activePosition.direction || activePosition.type} {activePosition.volume} LOTS ({activePosition.symbol})
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 font-mono">
+                      1:3 RR TARGET ACTIVE
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-text-secondary mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono">
+                    <span>Entry: <strong className="text-text-primary">${formatPrice(activePosition.price_open || activePosition.open_price)}</strong></span>
+                    <span>Stop Loss: <strong className="text-loss">${formatPrice(activePosition.sl)}</strong></span>
+                    <span>Take Profit (1:3 RR): <strong className="text-profit">${formatPrice(activePosition.tp)}</strong></span>
+                    <span>Current P/L: <strong className={Number(activePosition.profit) >= 0 ? "text-profit font-bold" : "text-loss font-bold"}>
+                      {Number(activePosition.profit) >= 0 ? `+$${Number(activePosition.profit).toFixed(2)}` : `-$${Math.abs(Number(activePosition.profit)).toFixed(2)}`}
+                    </strong></span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleCloseTrade(activePosition.ticket)}
+                  disabled={isClosingTrade}
+                  className="px-3.5 py-2 bg-loss/15 hover:bg-loss/25 text-loss border border-loss/40 rounded text-xs font-bold active:scale-95 transition-all flex items-center gap-1.5"
+                >
+                  <RefreshCw className={cn("w-3.5 h-3.5", isClosingTrade && "animate-spin")} />
+                  <span>{isClosingTrade ? "Liquidating..." : "Close Trade (Market)"}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-surface border border-border rounded-card p-3.5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-extrabold text-text-primary uppercase tracking-wide">
+                    SMC Quantitative Forecast Active ({instrument})
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-profit/15 text-profit border border-profit/30 font-mono">
+                    TARGETING 1:3 RISK/REWARD
+                  </span>
+                </div>
+                <p className="text-[11px] text-text-secondary mt-1">
+                  Cyan FVG Zone marked ({formatPrice(fvgLow)} – {formatPrice(fvgHigh)}). Price moving in forecast direction.
+                  SL at <strong className="text-loss">{formatPrice(initialSl)}</strong> ({slPoints} pts) · TP at <strong className="text-profit">{formatPrice(targetTp)}</strong> (3x SL distance · exact 1:3 RR).
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExecuteTrade}
+                  disabled={isExecutingTrade}
+                  className="px-4 py-2 bg-profit hover:bg-emerald-600 text-black font-extrabold text-xs rounded flex items-center gap-1.5 shadow-sm active:scale-95 transition-all"
+                >
+                  <Zap className={cn("w-3.5 h-3.5", isExecutingTrade && "animate-spin")} />
+                  <span>{isExecutingTrade ? "Placing Order on Exness MT5..." : `PLACE ${direction} ORDER (1:3 RR · ${calculatedLotSize} LOT)`}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {chartViewMode === "tradingview" ? (
+        <TradingViewLiveChart symbol={instrument} height={520} />
+      ) : (
+        <>
+          {/* ── 3. Step Controller Toolbar ── */}
+          <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-border overflow-x-auto no-scrollbar gap-2">
         <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-[11px] font-bold text-text-secondary uppercase tracking-wider mr-1">
             SMC Sequence:
@@ -865,6 +1077,8 @@ export function InteractiveForecastChart({
           </span>
         </div>
       </div>
+        </>
+      )}
 
       {/* ── 5. Bottom Analytical Tabs (Solid Institutional Navigation) ── */}
       <div className="border-t border-border bg-surface transition-colors">
