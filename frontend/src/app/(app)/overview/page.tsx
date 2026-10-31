@@ -22,14 +22,14 @@ export default function OverviewPage() {
 
   const isOnline =
     heartbeat != null &&
-    (Date.now() - new Date(heartbeat.ts).getTime()) / 1000 < 60 &&
+    (Date.now() - new Date(heartbeat.ts).getTime()) / 1000 < 90 &&
     (heartbeat.mt5_connected ?? false);
 
-  const currentEquity = isOnline ? (heartbeat?.equity ?? account?.equity ?? null) : null;
-  const currentBalance = isOnline ? (heartbeat?.balance ?? account?.balance ?? null) : null;
-  const dailyPnl = isOnline ? (account?.daily_pnl ?? 0) : null;
-  const drawdownPct = isOnline ? (account?.drawdown_pct ?? 0) : null;
-  const openPositions = isOnline ? (account?.open_positions ?? 0) : 0;
+  const currentEquity = heartbeat?.equity ?? account?.equity ?? null;
+  const currentBalance = heartbeat?.balance ?? account?.balance ?? null;
+  const dailyPnl = account?.daily_pnl ?? 0;
+  const drawdownPct = account?.drawdown_pct ?? 0;
+  const openPositions = account?.open_positions ?? 0;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16">

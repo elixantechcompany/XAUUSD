@@ -76,7 +76,7 @@ export async function GET() {
 
     // 3. Fetch account settings from Supabase
     const settingsRes = await fetch(
-      `${supabaseUrl}/rest/v1/settings?select=key,value&key=like.mt5_account_%`,
+      `${supabaseUrl}/rest/v1/settings?select=key,value&key=like.mt5_account_*`,
       { headers, cache: "no-store" }
     );
 

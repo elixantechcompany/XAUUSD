@@ -13,14 +13,28 @@ import type {
 // ── Heartbeat ─────────────────────────────────────────────────────────────────
 
 export async function getLatestHeartbeat(): Promise<Heartbeat | null> {
-  const { data, error } = await getSupabaseClient()
-    .from("heartbeats")
-    .select("*")
-    .order("ts", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
+  if (typeof window !== "undefined") {
+    try {
+      const res = await fetch("/api/telemetry/heartbeat", { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.heartbeat) return json.heartbeat;
+      }
+    } catch {
+      // fallback
+    }
+  }
+  try {
+    const { data } = await getSupabaseClient()
+      .from("heartbeats")
+      .select("*")
+      .order("ts", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 export function subscribeToHeartbeat(cb: (h: Heartbeat) => void) {
@@ -34,14 +48,28 @@ export function subscribeToHeartbeat(cb: (h: Heartbeat) => void) {
 // ── Account ───────────────────────────────────────────────────────────────────
 
 export async function getLatestAccountSnapshot(): Promise<AccountSnapshot | null> {
-  const { data, error } = await getSupabaseClient()
-    .from("accounts_snapshot")
-    .select("*")
-    .order("ts", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
+  if (typeof window !== "undefined") {
+    try {
+      const res = await fetch("/api/telemetry/heartbeat", { cache: "no-store" });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.snapshot) return json.snapshot;
+      }
+    } catch {
+      // fallback
+    }
+  }
+  try {
+    const { data } = await getSupabaseClient()
+      .from("accounts_snapshot")
+      .select("*")
+      .order("ts", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 export async function getAccountHistory(hours = 24): Promise<AccountSnapshot[]> {

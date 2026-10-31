@@ -46,8 +46,8 @@ export type BotStatus = "ONLINE" | "STALE" | "OFFLINE" | "UNKNOWN";
 export function getBotStatus(lastTs: string | null | undefined): BotStatus {
   if (!lastTs) return "UNKNOWN";
   const ageSeconds = (Date.now() - new Date(lastTs).getTime()) / 1000;
-  if (ageSeconds < 15)  return "ONLINE";
-  if (ageSeconds < 60)  return "STALE";
+  if (ageSeconds < 45)  return "ONLINE";
+  if (ageSeconds < 120) return "STALE";
   return "OFFLINE";
 }
 

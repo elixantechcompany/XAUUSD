@@ -7,10 +7,10 @@ interface StatusPillProps {
 }
 
 const STATUS_LABELS: Record<BotStatus, string> = {
-  ONLINE:  "Running",
+  ONLINE:  "Bot Running",
   STALE:   "Stale",
   OFFLINE: "Offline",
-  UNKNOWN: "Unknown",
+  UNKNOWN: "Offline",
 };
 
 const STATUS_DOTS: Record<BotStatus, string> = {

@@ -207,6 +207,21 @@ export default function AccountsPage() {
   // ── Supabase fallback for offline / remote viewing ──────────────────────────
   async function loadFromSupabase() {
     try {
+      let isOnline = false;
+      let liveEquity = 0.0;
+      let liveBalance = 0.0;
+      try {
+        const hbRes = await fetch("/api/telemetry/heartbeat", { cache: "no-store" });
+        if (hbRes.ok) {
+          const hbData = await hbRes.json();
+          isOnline = hbData.is_online ?? false;
+          if (hbData.heartbeat?.equity != null) liveEquity = Number(hbData.heartbeat.equity);
+          if (hbData.heartbeat?.balance != null) liveBalance = Number(hbData.heartbeat.balance);
+        }
+      } catch {
+        // ignore
+      }
+
       const { data } = await getSupabaseClient()
         .from("settings")
         .select("key, value")
@@ -217,17 +232,17 @@ export default function AccountsPage() {
       const childRows = loaded.filter((a) => a !== masterRow);
 
       setCopierData({
-        terminal_online: false,
+        terminal_online: isOnline,
         master: {
           account_id: masterRow ? Number(masterRow.login || masterRow.account_id) : 0,
           label: masterRow?.label ?? (masterRow?.account_id ? `Exness ${masterRow.mode || "Demo"} #${masterRow.account_id}` : "Exness Master Terminal"),
           server: masterRow?.server ?? "Exness-MT5Trial9",
-          balance: 0.0,
-          equity: 0.0,
-          margin_free: 0.0,
+          balance: isOnline ? liveBalance : (masterRow?.balance ?? 0.0),
+          equity: isOnline ? liveEquity : (masterRow?.equity ?? 0.0),
+          margin_free: isOnline ? liveEquity : 0.0,
           is_master: true,
           is_active: true,
-          status: masterRow?.account_id ? "STANDBY (READY ON LAPTOP)" : "NOT CONFIGURED",
+          status: isOnline ? "CONNECTED (LIVE IPC)" : (masterRow?.account_id ? "STANDBY (READY ON LAPTOP)" : "NOT CONFIGURED"),
           symbol: masterRow?.symbol ?? "BTCUSD",
           mode: masterRow?.mode ?? "DEMO",
         },

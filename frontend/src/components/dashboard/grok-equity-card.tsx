@@ -26,7 +26,7 @@ export function GrokEquityCard({
   const isProfit = pnl >= 0;
 
   return (
-    <div className="bg-surface/90 backdrop-blur-xl border border-border rounded-card p-6 shadow-sm dark:shadow-[0_0_50px_rgba(0,0,0,0.5)] relative overflow-hidden transition-all duration-200">
+    <div className="bg-surface border border-border rounded-card p-6 shadow-sm relative overflow-hidden transition-all duration-200">
       {/* Top subtle gold reflection */}
       <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-gold/60 to-transparent" />
 

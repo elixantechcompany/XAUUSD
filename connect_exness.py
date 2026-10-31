@@ -271,6 +271,7 @@ def main():
 
     print("[4/4] Starting continuous live telemetry & SMC market publisher...")
     last_cleanup = time.time()
+    last_snapshot = 0.0
     heartbeat_count = 0
 
     try:
@@ -304,16 +305,35 @@ def main():
             except Exception as e:
                 pass
 
-            # 2. Insert Heartbeat
-            supabase.table("heartbeats").insert({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "mt5_connected": True,
-                "last_tick_ts": datetime.now(timezone.utc).isoformat(),
-                "equity": float(curr_info.equity),
-                "balance": float(curr_info.balance),
-                "execution_mode": mode.lower(),
-                "live_trading_enabled": False,
-            }).execute()
+            # 2. Insert Heartbeat (Live Active)
+            try:
+                supabase.table("heartbeats").insert({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "mt5_connected": True,
+                    "last_tick_ts": datetime.now(timezone.utc).isoformat(),
+                    "equity": float(curr_info.equity),
+                    "balance": float(curr_info.balance),
+                    "execution_mode": mode.lower(),
+                    "live_trading_enabled": True,
+                }).execute()
+            except Exception:
+                pass
+
+            # 3. Synchronize Account Snapshot
+            if time.time() - last_snapshot > 15:
+                try:
+                    supabase.table("accounts_snapshot").insert({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "equity": float(curr_info.equity),
+                        "balance": float(curr_info.balance),
+                        "open_positions_count": mt5.positions_total() or 0,
+                        "daily_pnl": round(float(curr_info.equity - curr_info.balance), 2),
+                        "drawdown_pct": 0.0,
+                        "execution_mode": mode.lower(),
+                    }).execute()
+                    last_snapshot = time.time()
+                except Exception:
+                    pass
 
             heartbeat_count += 1
             if heartbeat_count % 6 == 0 or heartbeat_count == 1:
