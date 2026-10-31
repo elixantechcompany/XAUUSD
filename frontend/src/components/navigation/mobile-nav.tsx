@@ -16,7 +16,7 @@ export function MobileNav() {
   const pathname = usePathname();
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 bg-[#0D131C] border-t border-[#1B2535] pb-safe z-40 backdrop-blur-md"
+      className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border pb-safe z-40 transition-colors duration-200"
       aria-label="Mobile navigation"
     >
       <div className="flex items-center justify-around h-14">

@@ -4,25 +4,23 @@
 
 :root {
   --font-sans: "Inter", "Geist", system-ui, sans-serif;
-  --background: #F4F6F9;
+  --background: #F8FAFC;
   --surface: #FFFFFF;
-  --surface-2: #EDF2F7;
-  --border: #E2E8F0;
+  --surface-2: #F1F5F9;
+  --border: #CBD5E1;
+  --border-strong: #94A3B8;
   --text-primary: #0F172A;
-  --text-secondary: #64748B;
-  --glass-bg: rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(226, 232, 240, 0.8);
+  --text-secondary: #475569;
 }
 
 .dark {
   --background: #070A0F;
-  --surface: #0D131C;
-  --surface-2: #161F2E;
-  --border: #243043;
-  --text-primary: #F2F5F9;
-  --text-secondary: #8A97A8;
-  --glass-bg: rgba(13, 19, 28, 0.85);
-  --glass-border: rgba(36, 48, 67, 0.8);
+  --surface: #0E141F;
+  --surface-2: #16202E;
+  --border: #1F2D40;
+  --border-strong: #33445C;
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
 }
 
 * {
@@ -30,7 +28,7 @@
 }
 
 ::selection {
-  background: rgba(212, 175, 55, 0.3);
+  background: rgba(212, 175, 55, 0.35);
   color: #F59E0B;
 }
 
@@ -41,38 +39,38 @@ body {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
-/* Tabular numbers on all price/pnl elements */
+/* Tabular numbers on all prices & metrics */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Scrollbar styling */
+/* Institutional Terminal Scrollbars */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
-.dark ::-webkit-scrollbar-thumb { background: #1B2535; }
+::-webkit-scrollbar-track { background: var(--background); }
+::-webkit-scrollbar-thumb { background: #94A3B8; border-radius: 3px; }
+.dark ::-webkit-scrollbar-thumb { background: #1F2D40; }
 ::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
 
-/* Refined Glassmorphism token utilities matching Image 2 */
-.glass-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--glass-border);
+/* Crisp, Solid Institutional Terminal Card (NO GLASSMORPHISM) */
+.terminal-panel {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.dark .terminal-panel {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
-.glass-card {
-  background: var(--surface);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+.terminal-card {
+  background-color: var(--surface);
   border: 1px solid var(--border);
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
-.dark .glass-card {
-  box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5);
+.dark .terminal-card {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 /* Safe area support for mobile */

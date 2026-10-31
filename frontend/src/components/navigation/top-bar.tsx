@@ -48,7 +48,7 @@ export function TopBar() {
 
   return (
     <>
-      <header className="bg-surface/90 backdrop-blur-xl border-b border-border px-4 h-14 flex items-center justify-between shrink-0 md:px-6 transition-colors duration-200">
+      <header className="bg-surface border-b border-border px-4 h-14 flex items-center justify-between shrink-0 md:px-6 transition-colors duration-200 shadow-xs">
         {/* Mobile brand header */}
         <div className="flex items-center gap-2.5 md:hidden">
           <Link href="/" className="flex items-center gap-2">
