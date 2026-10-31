@@ -325,11 +325,11 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "FVG"
-                ? "bg-purple-500/20 text-purple-400 border-purple-500/50 font-bold"
+                ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50 font-bold shadow-sm"
                 : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
-            2. Mark FVG Zone
+            2. Mark FVG (Cyan Zone)
           </button>
 
           <button
@@ -475,27 +475,28 @@ export function InteractiveForecastChart({
             </g>
           )}
 
-          {/* ── 2. The Fair Value Gap (FVG) Imbalance Box (Step 2 - Image 1 purple/white box) ── */}
+          {/* ── 2. The Fair Value Gap (FVG) Imbalance Box (Step 2 - TradingView Image 1 Cyan Box) ── */}
           {(activeStep === "ALL" || activeStep === "FVG" || activeStep === "RETRACEMENT" || activeStep === "CONFIRMATION" || activeStep === "EXECUTION") && (
             <g>
+              {/* Cyan FVG Zone Marked Out on Chart */}
               <rect
                 x="80"
                 y={getY(fvgHigh)}
                 width="310"
                 height={Math.max(12, getY(fvgLow) - getY(fvgHigh))}
-                fill="rgba(168, 85, 247, 0.14)"
-                stroke="#D8B4FE"
-                strokeWidth="1.5"
-                rx="2"
+                fill="rgba(6, 182, 212, 0.22)"
+                stroke="#00F0FF"
+                strokeWidth="1.8"
+                rx="3"
               />
               <text
                 x="85"
                 y={getY(fvgHigh) - 6}
-                fill="#C084FC"
+                fill="#22D3EE"
                 fontSize="9"
                 fontWeight="bold"
               >
-                H1 FAIR VALUE GAP · {fvgPips} PIPS ({formatPrice(fvgLow)} — {formatPrice(fvgHigh)})
+                H1 FAIR VALUE GAP (CYAN MARKED ZONE) · {fvgPips} PIPS ({formatPrice(fvgLow)} — {formatPrice(fvgHigh)})
               </text>
 
               {/* 50% Consequent Encroachment (C.E.) Line */}
@@ -504,15 +505,16 @@ export function InteractiveForecastChart({
                 y1={getY(ceLevel)}
                 x2="390"
                 y2={getY(ceLevel)}
-                stroke="#C084FC"
-                strokeDasharray="3,3"
-                strokeWidth="1.2"
+                stroke="#22D3EE"
+                strokeDasharray="4,3"
+                strokeWidth="1.4"
               />
               <text
-                x="320"
+                x="300"
                 y={getY(ceLevel) - 4}
-                fill="#E9D5FF"
+                fill="#A5F3FC"
                 fontSize="8"
+                fontWeight="bold"
               >
                 50% C.E. {formatPrice(ceLevel)}
               </text>
@@ -944,12 +946,12 @@ export function InteractiveForecastChart({
               </div>
 
               <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
-                <div className="flex items-center justify-between text-purple-400 font-bold">
-                  <span>2. 3-Candle Fair Value Gap (FVG)</span>
+                <div className="flex items-center justify-between text-cyan-400 font-bold">
+                  <span>2. 3-Candle Fair Value Gap (Cyan Marked Zone)</span>
                   <span className="font-mono">{fvgPips} pips wide</span>
                 </div>
                 <p className="text-[11px] text-text-secondary leading-relaxed">
-                  Inefficient 3-candle displacement created an imbalance between Candle 1 low and Candle 3 high ({formatPrice(fvgLow)} to {formatPrice(fvgHigh)}). Marked 50% Consequent Encroachment at {formatPrice(ceLevel)}.
+                  Inefficient 3-candle displacement created an imbalance between Candle 1 low and Candle 3 high ({formatPrice(fvgLow)} to {formatPrice(fvgHigh)}). Marked out in cyan with 50% Consequent Encroachment at {formatPrice(ceLevel)}.
                 </p>
               </div>
 

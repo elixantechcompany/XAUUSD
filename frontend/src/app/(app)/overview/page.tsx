@@ -101,7 +101,7 @@ export default function OverviewPage() {
           )}
           <span className="text-text-secondary font-medium">Terminal IPC:</span>
           <span className={isOnline ? "text-emerald-400 font-bold" : "text-amber-400 font-bold"}>
-            {isOnline ? "Single Process Connected" : "Local Standby (Awaiting MT5 Terminal)"}
+            {isOnline ? "Single Process Connected (Terminal IPC Active)" : "Terminal Standby (Run connect_exness.bat on Laptop)"}
           </span>
         </div>
 

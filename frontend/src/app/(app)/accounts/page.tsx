@@ -173,29 +173,28 @@ export default function AccountsPage() {
     }, 100);
   }
 
-  // ── Fetch accounts from Local Engine ─────────────────────────────────────────
+  // ── Fetch accounts from Internal Server API (Zero Mixed-Content & Zero RLS issues) ──
   async function fetchCopierAccounts(silent = false) {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     setError(null);
 
     try {
-      const res = await fetch(`${engineApiUrl}/copier/accounts`, {
-        cache: "no-store",
-      });
+      const res = await fetch("/api/account", { cache: "no-store" });
       if (res.ok) {
         const data: CopierResponse = await res.json();
         setCopierData(data);
       } else {
-        // Fallback to Supabase settings if engine direct query fails
         await loadFromSupabase();
       }
 
-      // Also fetch copied trade audit records
-      const tradesRes = await fetch(`${engineApiUrl}/copier/trades`, { cache: "no-store" });
-      if (tradesRes.ok) {
-        const trades: CopiedTrade[] = await tradesRes.json();
-        setCopiedTrades(trades);
+      // If running on local network, also try to fetch copier trades
+      if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+        const tradesRes = await fetch(`${engineApiUrl}/copier/trades`, { cache: "no-store" }).catch(() => null);
+        if (tradesRes && tradesRes.ok) {
+          const trades: CopiedTrade[] = await tradesRes.json();
+          setCopiedTrades(trades);
+        }
       }
     } catch {
       await loadFromSupabase();
@@ -222,13 +221,13 @@ export default function AccountsPage() {
         master: {
           account_id: masterRow ? Number(masterRow.login || masterRow.account_id) : 0,
           label: masterRow?.label ?? (masterRow?.account_id ? `Exness ${masterRow.mode || "Demo"} #${masterRow.account_id}` : "Exness Master Terminal"),
-          server: masterRow?.server ?? "Exness-MT5Trial12",
+          server: masterRow?.server ?? "Exness-MT5Trial9",
           balance: 0.0,
           equity: 0.0,
           margin_free: 0.0,
           is_master: true,
           is_active: true,
-          status: masterRow?.account_id ? "SAVED (READY FOR DEMO)" : "NOT CONFIGURED",
+          status: masterRow?.account_id ? "STANDBY (READY ON LAPTOP)" : "NOT CONFIGURED",
           symbol: masterRow?.symbol ?? "BTCUSD",
           mode: masterRow?.mode ?? "DEMO",
         },
@@ -254,8 +253,8 @@ export default function AccountsPage() {
 
   async function handleConfigureMaster(e: FormEvent) {
     e.preventDefault();
-    if (!masterLogin || !masterPassword) {
-      return setError("Please provide your Exness account number and trading password.");
+    if (!masterLogin) {
+      return setError("Please provide your Exness account number / MT5 login.");
     }
     const acctId = parseInt(masterLogin, 10);
     if (isNaN(acctId)) {
@@ -266,8 +265,8 @@ export default function AccountsPage() {
     setError(null);
 
     try {
-      // 1. Send securely to local engine if running -> Windows Credential Manager
-      await fetch(`${engineApiUrl}/copier/master`, {
+      // 1. Post to Server API (persists to Supabase settings with service-role, dispatches command)
+      const res = await fetch("/api/account/master", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -278,43 +277,30 @@ export default function AccountsPage() {
           symbol: masterSymbol,
           mode: masterMode,
         }),
-      }).catch(() => null);
+      });
 
-      // 2. Persist master account configuration into Supabase settings
-      await getSupabaseClient()
-        .from("settings")
-        .upsert(
-          {
-            key: "mt5_account_master",
-            value: {
-              account_id: acctId,
-              login: acctId.toString(),
-              label: masterLabel || `Exness ${masterMode} #${acctId}`,
-              server: finalMasterServer,
-              symbol: masterSymbol,
-              mode: masterMode,
-              is_master: true,
-              is_active: true,
-              updated_at: new Date().toISOString(),
-            },
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Failed to configure Master Account.");
+      }
 
-      // 3. Persist active symbol
-      await getSupabaseClient()
-        .from("settings")
-        .upsert(
-          {
-            key: "mt5_active_symbol",
-            value: { symbol: masterSymbol },
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
+      // 2. Also forward to local engine if running on localhost
+      if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+        await fetch(`${engineApiUrl}/copier/master`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            account_id: acctId,
+            password: masterPassword,
+            server: finalMasterServer,
+            label: masterLabel || `Exness ${masterMode} #${acctId}`,
+            symbol: masterSymbol,
+            mode: masterMode,
+          }),
+        }).catch(() => null);
+      }
 
-      setSuccess(`Exness ${masterMode} Account #${acctId} configured for ${masterSymbol}! Run the engine command on your laptop to start testing.`);
+      setSuccess(`Exness ${masterMode} Account #${acctId} configured for ${masterSymbol}! Run connect_exness.bat or python main.py on your laptop to start live stream.`);
       setShowMasterModal(false);
       setMasterPassword("");
       await fetchCopierAccounts(true);
@@ -329,31 +315,18 @@ export default function AccountsPage() {
     try {
       const currentMaster = copierData?.master;
       if (currentMaster?.account_id) {
-        await getSupabaseClient()
-          .from("settings")
-          .upsert(
-            {
-              key: "mt5_account_master",
-              value: {
-                ...currentMaster,
-                symbol: target,
-                updated_at: new Date().toISOString(),
-              },
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "key" }
-          );
+        await fetch("/api/account/master", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            account_id: currentMaster.account_id,
+            server: currentMaster.server,
+            label: currentMaster.label,
+            symbol: target,
+            mode: currentMaster.mode || "DEMO",
+          }),
+        });
       }
-      await getSupabaseClient()
-        .from("settings")
-        .upsert(
-          {
-            key: "mt5_active_symbol",
-            value: { symbol: target },
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
       setSuccess(`Active target asset switched to ${target}!`);
       await fetchCopierAccounts(true);
     } catch {
@@ -370,14 +343,14 @@ export default function AccountsPage() {
 
   useEffect(() => {
     fetchCopierAccounts();
-    const interval = setInterval(() => fetchCopierAccounts(true), 15000);
+    const interval = setInterval(() => fetchCopierAccounts(true), 10000);
     return () => clearInterval(interval);
   }, []);
 
   // ── Add Child Account ────────────────────────────────────────────────────────
   async function handleAddAccount(e: FormEvent) {
     e.preventDefault();
-    if (!label || !login || !password || !finalServer) {
+    if (!label || !login || !finalServer) {
       return setError("Please fill in all required fields.");
     }
     setSaving(true);
@@ -390,8 +363,8 @@ export default function AccountsPage() {
     }
 
     try {
-      // 1. Send credential securely to local engine -> Windows Credential Manager
-      const res = await fetch(`${engineApiUrl}/copier/accounts`, {
+      // 1. Post to Server API (persists securely to Supabase settings)
+      const res = await fetch("/api/account/sub-accounts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -399,38 +372,33 @@ export default function AccountsPage() {
           password,
           server: finalServer,
           label,
-          risk_pct: 1.0,
           risk_multiplier: multiplier,
           is_active: true,
-          max_slippage_pips: maxSlippage,
         }),
       });
 
+      const json = await res.json();
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail ?? `Engine returned status ${res.status}`);
+        throw new Error(json.error || "Failed to register sub-account.");
       }
 
-      // 2. Save non-sensitive metadata into Supabase for remote dashboards
-      await getSupabaseClient()
-        .from("settings")
-        .upsert(
-          {
-            key: `mt5_account_${acctId}`,
-            value: {
-              account_id: acctId,
-              login: acctId.toString(),
-              label,
-              server: finalServer,
-              risk_multiplier: multiplier,
-              is_master: false,
-              is_active: true,
-              created_at: new Date().toISOString(),
-            },
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
+      // 2. Also register with local engine if running on localhost
+      if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+        await fetch(`${engineApiUrl}/copier/accounts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            account_id: acctId,
+            password,
+            server: finalServer,
+            label,
+            risk_pct: 1.0,
+            risk_multiplier: multiplier,
+            is_active: true,
+            max_slippage_pips: maxSlippage,
+          }),
+        }).catch(() => null);
+      }
 
       setPassword("");
       setSuccess(`Sub-account ${label} (${acctId}) successfully linked to Copier!`);
@@ -453,14 +421,23 @@ export default function AccountsPage() {
   async function handleToggle(accountId: number) {
     setTogglingId(accountId);
     try {
-      const res = await fetch(`${engineApiUrl}/copier/accounts/${accountId}/toggle`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        await fetchCopierAccounts(true);
+      const targetChild = copierData?.children.find((c) => c.account_id === accountId);
+      if (targetChild) {
+        await fetch("/api/account/sub-accounts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            account_id: accountId,
+            server: targetChild.server,
+            label: targetChild.label,
+            risk_multiplier: targetChild.risk_multiplier,
+            is_active: !targetChild.is_active,
+          }),
+        });
       }
+      await fetchCopierAccounts(true);
     } catch {
-      setError("Failed to communicate with engine to toggle account.");
+      setError("Failed to toggle sub-account replication.");
     } finally {
       setTogglingId(null);
     }
@@ -469,13 +446,13 @@ export default function AccountsPage() {
   // ── Remove Account ─────────────────────────────────────────────────────────
   async function handleRemove(accountId: number) {
     try {
-      await fetch(`${engineApiUrl}/copier/accounts/${accountId}`, {
+      const res = await fetch(`/api/account/sub-accounts?account_id=${accountId}`, {
         method: "DELETE",
       });
-      await getSupabaseClient()
-        .from("settings")
-        .delete()
-        .eq("key", `mt5_account_${accountId}`);
+      if (!res.ok) {
+        const json = await res.json();
+        throw new Error(json.error || "Failed to remove account.");
+      }
       await fetchCopierAccounts(true);
       setSuccess(`Account ${accountId} removed.`);
     } catch {
