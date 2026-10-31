@@ -4,6 +4,25 @@
 
 :root {
   --font-sans: "Inter", "Geist", system-ui, sans-serif;
+  --background: #F4F6F9;
+  --surface: #FFFFFF;
+  --surface-2: #EDF2F7;
+  --border: #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --glass-bg: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(226, 232, 240, 0.8);
+}
+
+.dark {
+  --background: #070A0F;
+  --surface: #0D131C;
+  --surface-2: #161F2E;
+  --border: #243043;
+  --text-primary: #F2F5F9;
+  --text-secondary: #8A97A8;
+  --glass-bg: rgba(13, 19, 28, 0.85);
+  --glass-border: rgba(36, 48, 67, 0.8);
 }
 
 * {
@@ -16,12 +35,13 @@
 }
 
 body {
-  background-color: #070A0F;
-  color: #F2F5F9;
+  background-color: var(--background);
+  color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
 /* Tabular numbers on all price/pnl elements */
@@ -32,15 +52,27 @@ body {
 /* Scrollbar styling */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1B2535; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+.dark ::-webkit-scrollbar-thumb { background: #1B2535; }
 ::-webkit-scrollbar-thumb:hover { background: #D4AF37; }
 
-/* Glassmorphism token utility */
+/* Refined Glassmorphism token utilities matching Image 2 */
 .glass-panel {
-  background: rgba(13, 19, 28, 0.85);
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-card {
+  background: var(--surface);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(36, 48, 67, 0.8);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
+}
+.dark .glass-card {
+  box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5);
 }
 
 /* Safe area support for mobile */

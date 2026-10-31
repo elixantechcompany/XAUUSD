@@ -88,13 +88,13 @@ export function GrokAgentPipeline({
   ];
 
   return (
-    <div className="bg-[#0D131C] border border-[#243043] rounded-card p-5 shadow-[0_0_40px_rgba(0,0,0,0.4)] space-y-4">
+    <div className="bg-surface/90 backdrop-blur-xl border border-border rounded-card p-5 shadow-sm space-y-4 transition-colors">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[#1B2535] pb-3">
-        <h3 className="text-base font-extrabold text-white tracking-tight flex items-center gap-2">
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <h3 className="text-base font-extrabold text-text-primary tracking-tight flex items-center gap-2">
           Autonomous Pipeline
         </h3>
-        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#121821] text-text-secondary border border-[#243043]">
+        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-surface-2 text-text-secondary border border-border">
           5-Agent Relay
         </span>
       </div>
@@ -106,7 +106,7 @@ export function GrokAgentPipeline({
           return (
             <div
               key={agent.id}
-              className="flex items-center justify-between p-3 rounded-inner bg-[#121821]/80 hover:bg-[#121821] border border-[#1E293B] transition-all hover:border-[#2E3D52] group"
+              className="flex items-center justify-between p-3 rounded-inner bg-surface-2/60 hover:bg-surface-2 border border-border transition-all hover:border-accent/40 group"
             >
               {/* Left: Icon & Title */}
               <div className="flex items-center gap-3 min-w-0">
@@ -117,7 +117,7 @@ export function GrokAgentPipeline({
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-sm text-white group-hover:text-gold transition-colors">
+                    <span className="font-bold text-sm text-text-primary group-hover:text-gold transition-colors">
                       {agent.name}
                     </span>
                     {agent.inFlight && (

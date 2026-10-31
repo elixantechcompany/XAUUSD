@@ -10,15 +10,15 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Design system tokens from Developer Guide §6
-        background:   "#0B0F14",
-        surface:      "#121821",
-        "surface-2":  "#1A2230",
-        border:       "#243043",
-        "text-primary":   "#F2F5F9",
-        "text-secondary": "#8A97A8",
+        // Dynamic tokens supporting Light & Dark modes
+        background:   "var(--background)",
+        surface:      "var(--surface)",
+        "surface-2":  "var(--surface-2)",
+        border:       "var(--border)",
+        "text-primary":   "var(--text-primary)",
+        "text-secondary": "var(--text-secondary)",
         accent:   "#3B82F6",
-        profit:   "#22C55E",
+        profit:   "#10B981",
         loss:     "#EF4444",
         warning:  "#F59E0B",
         gold:     "#D4AF37",

@@ -38,15 +38,15 @@ export function DesktopSidebar() {
   }
 
   return (
-    <aside className="w-60 bg-[#0D131C] border-r border-[#1B2535] flex flex-col shrink-0">
+    <aside className="w-60 bg-surface border-r border-border flex flex-col shrink-0 transition-colors duration-200">
       {/* Brand Logo Header */}
-      <div className="p-4 border-b border-[#1B2535]">
+      <div className="p-4 border-b border-border">
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gold/20 via-accent/20 to-emerald-500/20 border border-gold/40 flex items-center justify-center shadow-[0_0_15px_rgba(212,175,55,0.2)] group-hover:border-gold/70 transition-all">
             <Zap className="w-4 h-4 text-gold fill-gold/20" aria-hidden />
           </div>
           <div className="flex flex-col">
-            <span className="font-extrabold text-sm text-white tracking-tight flex items-center gap-1">
+            <span className="font-extrabold text-sm text-text-primary tracking-tight flex items-center gap-1">
               ELIXAN <span className="text-gold">QUANT</span>
             </span>
             <span className="text-[10px] text-text-secondary font-mono tracking-wider">

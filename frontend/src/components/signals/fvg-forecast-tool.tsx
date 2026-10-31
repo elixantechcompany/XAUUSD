@@ -26,7 +26,7 @@ export function FvgForecastTool({
   fvgLow,
   triggerLevel,
   sweepExtreme,
-  accountBalance = 10000,
+  accountBalance,
 }: FvgForecastProps) {
   const isBullish = direction === "BULLISH";
 
@@ -46,9 +46,10 @@ export function FvgForecastTool({
   const lock1Level = isBullish ? entryPrice + riskDistance * 1.5 : entryPrice - riskDistance * 1.5;
   const lock2Level = isBullish ? entryPrice + riskDistance * 2.0 : entryPrice - riskDistance * 2.0;
 
-  // 1% Dollar Risk on Account Balance
-  const dollarRisk = accountBalance * 0.01;
-  const dollarTargetReward = dollarRisk * rrRatio;
+  // 1% Dollar Risk on Account Balance (observed live)
+  const hasLiveBalance = accountBalance != null && accountBalance > 0;
+  const dollarRisk = hasLiveBalance ? accountBalance * 0.01 : null;
+  const dollarTargetReward = dollarRisk != null ? dollarRisk * rrRatio : null;
 
   // Visual layout proportions for the forecast tool
   const totalSpan = Math.max(rewardDistance + riskDistance, 0.01);
@@ -70,7 +71,7 @@ export function FvgForecastTool({
             R:R 1:{rrRatio.toFixed(2)}
           </span>
           <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-profit/15 text-profit border border-profit/30 font-mono">
-            Target +${dollarTargetReward.toFixed(2)}
+            {dollarTargetReward != null ? `Target +$${dollarTargetReward.toFixed(2)}` : `Target +${rewardPips} pips`}
           </span>
         </div>
       </div>
@@ -107,7 +108,7 @@ export function FvgForecastTool({
 
             <div className="text-right">
               <span className="text-[10px] text-profit font-semibold">
-                +{rewardPips} pips (+${dollarTargetReward.toFixed(2)})
+                +{rewardPips} pips {dollarTargetReward != null ? `(+$${dollarTargetReward.toFixed(2)})` : ""}
               </span>
             </div>
           </div>
@@ -129,7 +130,7 @@ export function FvgForecastTool({
           >
             <div className="text-right">
               <span className="text-[10px] text-loss font-semibold">
-                -{riskPips} pips (-${dollarRisk.toFixed(2)})
+                -{riskPips} pips {dollarRisk != null ? `(-$${dollarRisk.toFixed(2)})` : ""}
               </span>
             </div>
             <div className="flex items-center justify-between text-[11px]">
@@ -187,7 +188,7 @@ export function FvgForecastTool({
             <div className="bg-surface border border-border rounded-inner p-2.5">
               <span className="text-[10px] text-text-secondary block">Fixed Dollar Risk (1.0%)</span>
               <span className="font-mono font-bold text-loss mt-0.5 block">
-                ${dollarRisk.toFixed(2)} USD
+                {dollarRisk != null ? `$${dollarRisk.toFixed(2)} USD` : "1.0% Proportional Cap"}
               </span>
             </div>
             <div className="bg-surface border border-border rounded-inner p-2.5">

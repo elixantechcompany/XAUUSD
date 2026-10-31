@@ -33,15 +33,15 @@ export function GrokActivityFeed() {
   ].slice(0, 6);
 
   return (
-    <div className="bg-[#0D131C] border border-[#243043] rounded-card p-5 shadow-[0_0_40px_rgba(0,0,0,0.4)] space-y-4">
+    <div className="bg-surface/90 backdrop-blur-xl border border-border rounded-card p-5 shadow-sm space-y-4 transition-colors">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[#1B2535] pb-3">
-        <h3 className="text-base font-extrabold text-white tracking-tight flex items-center gap-2">
+      <div className="flex items-center justify-between border-b border-border pb-3">
+        <h3 className="text-base font-extrabold text-text-primary tracking-tight flex items-center gap-2">
           Activity Log
         </h3>
-        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#121821] text-text-secondary border border-[#243043] font-mono">
+        <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-surface-2 text-text-secondary border border-border font-mono">
           {realEvents.length > 0 ? (
-            <span className="text-emerald-400 font-bold">{realEvents.length} events logged</span>
+            <span className="text-profit font-bold">{realEvents.length} events logged</span>
           ) : (
             <span>Live Stream</span>
           )}
@@ -62,7 +62,7 @@ export function GrokActivityFeed() {
           {realEvents.map((item) => (
             <div
               key={item.id}
-              className="flex items-center justify-between gap-2 py-1 border-b border-[#161F2E]/60 last:border-b-0"
+              className="flex items-center justify-between gap-2 py-1.5 border-b border-border/50 last:border-b-0"
             >
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className={`w-2 h-2 rounded-full ${item.dotColor} shrink-0 shadow-sm`} />
@@ -79,7 +79,7 @@ export function GrokActivityFeed() {
               </div>
 
               {item.badge && (
-                <span className="text-[10px] font-bold text-text-secondary bg-[#121821] px-2 py-0.5 rounded border border-[#243043] shrink-0">
+                <span className="text-[10px] font-bold text-text-secondary bg-surface-2 px-2 py-0.5 rounded border border-border shrink-0">
                   {item.badge}
                 </span>
               )}

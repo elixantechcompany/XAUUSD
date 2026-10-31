@@ -20,12 +20,16 @@ export default function OverviewPage() {
     !["CLOSED", "EXPIRED", "INVALIDATED", "REJECTED"].includes(s.state)
   );
 
-  const isOnline = heartbeat?.mt5_connected ?? false;
-  const currentEquity = heartbeat?.equity ?? account?.equity ?? null;
-  const currentBalance = heartbeat?.balance ?? account?.balance ?? null;
-  const dailyPnl = account?.daily_pnl ?? null;
-  const drawdownPct = account?.drawdown_pct ?? null;
-  const openPositions = account?.open_positions ?? 0;
+  const isOnline =
+    heartbeat != null &&
+    (Date.now() - new Date(heartbeat.ts).getTime()) / 1000 < 60 &&
+    (heartbeat.mt5_connected ?? false);
+
+  const currentEquity = isOnline ? (heartbeat?.equity ?? account?.equity ?? null) : null;
+  const currentBalance = isOnline ? (heartbeat?.balance ?? account?.balance ?? null) : null;
+  const dailyPnl = isOnline ? (account?.daily_pnl ?? 0) : null;
+  const drawdownPct = isOnline ? (account?.drawdown_pct ?? 0) : null;
+  const openPositions = isOnline ? (account?.open_positions ?? 0) : 0;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16">
@@ -33,7 +37,7 @@ export default function OverviewPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+            <h1 className="text-2xl font-black tracking-tight text-text-primary flex items-center gap-2">
               ELIXAN QUANT DESK
             </h1>
             <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5">
@@ -88,7 +92,7 @@ export default function OverviewPage() {
       </div>
 
       {/* ── 6. Copier Engine Strip ── */}
-      <div className="bg-[#0D131C] border border-[#243043] rounded-card p-4 flex flex-wrap gap-4 items-center justify-between text-xs">
+      <div className="bg-surface border border-border rounded-card p-4 flex flex-wrap gap-4 items-center justify-between text-xs transition-colors">
         <div className="flex items-center gap-2">
           {isOnline ? (
             <Wifi className="w-4 h-4 text-emerald-400" aria-hidden />

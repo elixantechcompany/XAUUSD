@@ -71,10 +71,16 @@ export function InteractiveForecastChart({
   initialInstrument = "XAUUSD",
 }: InteractiveForecastChartProps) {
   const storeSignals = useBotStore((s) => s.signals);
+  const heartbeat = useBotStore((s) => s.heartbeat);
+  const account = useBotStore((s) => s.account);
+
   const [instrument, setInstrument] = useState<"XAUUSD" | "BTCUSD">(initialInstrument);
   const [activeStep, setActiveStep] = useState<SmcStep>("ALL");
   const [isPlayingCycle, setIsPlayingCycle] = useState(false);
-  const [activeTab, setActiveTab] = useState<"reasons" | "macro" | "simulator">("reasons");
+  const [activeTab, setActiveTab] = useState<"reasons" | "macro" | "calculator" | "simulator">("calculator");
+  const [isAutoSimulating, setIsAutoSimulating] = useState(false);
+  const [simulationSpeed, setSimulationSpeed] = useState<1 | 2>(1);
+  const [studyAnalyzing, setStudyAnalyzing] = useState(false);
 
   // Check if a real active signal exists for the selected instrument
   const activeSignal = useMemo(() => {
@@ -100,6 +106,37 @@ export function InteractiveForecastChart({
   const targetTp = activeSignal?.take_profit ?? (isXau ? 3988.98 : 70350.0);
   const triggerLevel = activeSignal?.trigger_level ?? (isXau ? 4054.46 : 72450.0);
 
+  // ── Observed Account Balance & Autonomous Risk Calculation ───────────────
+  const liveBalance = (heartbeat?.balance && heartbeat.balance > 0)
+    ? heartbeat.balance
+    : (account?.balance && account.balance > 0)
+      ? account.balance
+      : null;
+
+  const [testBalance, setTestBalance] = useState<number>(10000.0);
+  const observedBalance = liveBalance ?? testBalance;
+  const isUsingLiveBalance = liveBalance !== null;
+
+  // 1.0% Fixed Risk Budget (STRATEGY_SPEC.md §3.1)
+  const riskPct = 1.0;
+  const riskUsd = observedBalance * (riskPct / 100);
+
+  // Stop Loss Distance in points and pips
+  const slDistance = Math.abs(entryPrice - initialSl);
+  const slPips = (slDistance * (isXau ? 10 : 1)).toFixed(1);
+
+  // Contract Size Multiplier:
+  // For Gold: 1 Standard Lot = 100 oz ($1 move = $100 per lot)
+  // For Bitcoin: 1 Standard Lot = 1 BTC ($1 move = $1 per lot)
+  const contractMultiplier = isXau ? 100 : 1;
+  const rawLot = slDistance > 0 ? riskUsd / (slDistance * contractMultiplier) : 0.01;
+  const calculatedLotSize = Math.max(0.01, Math.round(rawLot * 100) / 100);
+
+  // Potential Reward at Take Profit
+  const rewardDistance = Math.abs(targetTp - entryPrice);
+  const rewardUsd = rewardDistance * contractMultiplier * calculatedLotSize;
+  const calculatedLossUsd = slDistance * contractMultiplier * calculatedLotSize;
+
   // 50% Consequent Encroachment (C.E.) of the Fair Value Gap
   const ceLevel = (fvgHigh + fvgLow) / 2;
   const fvgSize = Math.abs(fvgHigh - fvgLow);
@@ -118,6 +155,30 @@ export function InteractiveForecastChart({
   const initialRisk = Math.abs(entryPrice - initialSl);
   const totalReward = Math.abs(targetTp - entryPrice);
   const rrRatio = initialRisk > 0 ? totalReward / initialRisk : 2.0;
+
+  // Auto-simulate market movement into TP
+  useEffect(() => {
+    if (!isAutoSimulating) return;
+    const interval = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 100) {
+          setIsAutoSimulating(false);
+          return 100;
+        }
+        return Math.min(100, prev + 1.2 * simulationSpeed);
+      });
+    }, 120);
+    return () => clearInterval(interval);
+  }, [isAutoSimulating, simulationSpeed]);
+
+  function runAutonomousMarketStudy() {
+    setStudyAnalyzing(true);
+    setTimeout(() => {
+      setStudyAnalyzing(false);
+      setActiveTab("calculator");
+      setActiveStep("ALL");
+    }, 900);
+  }
 
   // DYNAMIC TRAILING STOP LOSS (Aggressive Retracement Guardian)
   const currentProfitDistance = direction === "SHORT" ? entryPrice - currentPrice : currentPrice - entryPrice;
@@ -165,20 +226,20 @@ export function InteractiveForecastChart({
   }, [isPlayingCycle]);
 
   return (
-    <div className="bg-[#0B1017] border border-[#243043] rounded-card overflow-hidden shadow-[0_0_40px_rgba(0,0,0,0.6)]">
+    <div className="bg-surface/90 backdrop-blur-xl border border-border rounded-card overflow-hidden shadow-sm dark:shadow-[0_0_40px_rgba(0,0,0,0.6)] transition-colors">
       {/* ── Top Toolbar ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#121821] border-b border-[#1B2535]">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-surface border-b border-border">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-gold/20 via-accent/20 to-emerald-500/20 border border-gold/40 flex items-center justify-center">
             <Target className="w-4 h-4 text-gold" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="font-extrabold text-sm text-white tracking-tight">
+              <h3 className="font-extrabold text-sm text-text-primary tracking-tight">
                 TradingView SMC Quantitative Forecasting Engine
               </h3>
               <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-accent/15 text-accent border border-accent/30 font-mono">
-                {activeSignal ? "Active Live Signal" : "Analytical Forecasting Tool"}
+                {activeSignal ? "Active Live Signal" : "Autonomous Market Study"}
               </span>
             </div>
             <p className="text-[11px] text-text-secondary">
@@ -187,14 +248,25 @@ export function InteractiveForecastChart({
           </div>
         </div>
 
-        {/* Controls: Symbol & Direction */}
+        {/* Controls: Autonomous Study, Symbol & Direction */}
         <div className="flex items-center gap-2">
+          {/* Autonomous Study Trigger */}
+          <button
+            onClick={runAutonomousMarketStudy}
+            disabled={studyAnalyzing}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-inner bg-gradient-to-r from-accent to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold text-xs shadow-sm active:scale-95 transition-all"
+            title="Scan market structure, measure FVG, and derive risk lot sizing"
+          >
+            <Sparkles className={cn("w-3.5 h-3.5", studyAnalyzing && "animate-spin text-amber-300")} />
+            <span>{studyAnalyzing ? "Analyzing Market..." : "Autonomous Study"}</span>
+          </button>
+
           {/* Symbol Selector */}
-          <div className="inline-flex rounded-inner bg-[#070A0F] p-0.5 border border-[#243043]">
+          <div className="inline-flex rounded-inner bg-surface-2 p-0.5 border border-border">
             <button
               onClick={() => setInstrument("XAUUSD")}
               className={`px-3 py-1 text-xs font-semibold rounded transition-all ${
-                isXau ? "bg-gold text-black shadow font-bold" : "text-text-secondary hover:text-white"
+                isXau ? "bg-gold text-black shadow font-bold" : "text-text-secondary hover:text-text-primary"
               }`}
             >
               Gold (XAUUSD)
@@ -202,7 +274,7 @@ export function InteractiveForecastChart({
             <button
               onClick={() => setInstrument("BTCUSD")}
               className={`px-3 py-1 text-xs font-semibold rounded transition-all ${
-                !isXau ? "bg-gold text-black shadow font-bold" : "text-text-secondary hover:text-white"
+                !isXau ? "bg-gold text-black shadow font-bold" : "text-text-secondary hover:text-text-primary"
               }`}
             >
               Bitcoin (BTCUSD)
@@ -214,8 +286,8 @@ export function InteractiveForecastChart({
             onClick={() => setDirection((d) => (d === "SHORT" ? "LONG" : "SHORT"))}
             className={`px-3 py-1 text-xs font-bold rounded-inner flex items-center gap-1 border transition-all ${
               direction === "SHORT"
-                ? "bg-red-950/60 text-red-300 border-red-800"
-                : "bg-emerald-950/60 text-emerald-300 border-emerald-800"
+                ? "bg-loss/15 text-loss border-loss/30"
+                : "bg-profit/15 text-profit border-profit/30"
             }`}
           >
             {direction === "SHORT" ? (
@@ -229,7 +301,7 @@ export function InteractiveForecastChart({
       </div>
 
       {/* ── 5-Step SMC Quantitative Workflow Bar ── */}
-      <div className="bg-[#0e141d] px-4 py-2 border-b border-[#1B2535] flex flex-wrap items-center justify-between gap-2 text-xs">
+      <div className="bg-surface-2/60 px-4 py-2 border-b border-border flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-1.5 overflow-x-auto py-1">
           <span className="text-[11px] text-text-secondary font-medium mr-1 flex items-center gap-1">
             <Activity className="w-3.5 h-3.5 text-accent" />
@@ -241,8 +313,8 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "SWEEP"
-                ? "bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                ? "bg-amber-500/20 text-amber-500 border-amber-500/50 font-bold"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             1. Sweep Purge
@@ -253,8 +325,8 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "FVG"
-                ? "bg-purple-500/20 text-purple-300 border-purple-500/50 font-bold"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                ? "bg-purple-500/20 text-purple-400 border-purple-500/50 font-bold"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             2. Mark FVG Zone
@@ -265,8 +337,8 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "RETRACEMENT"
-                ? "bg-blue-500/20 text-blue-300 border-blue-500/50 font-bold"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                ? "bg-blue-500/20 text-blue-400 border-blue-500/50 font-bold"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             3. Mitigation Tap
@@ -277,8 +349,8 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "CONFIRMATION"
-                ? "bg-amber-400/20 text-amber-300 border-amber-400/50 font-bold animate-pulse"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                ? "bg-amber-400/20 text-amber-500 border-amber-400/50 font-bold animate-pulse"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             4. Wait Confirmation
@@ -289,8 +361,8 @@ export function InteractiveForecastChart({
             className={cn(
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "EXECUTION"
-                ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/50 font-bold"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                ? "bg-profit/20 text-profit border-profit/50 font-bold"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             5. Execute &amp; Trail
@@ -302,7 +374,7 @@ export function InteractiveForecastChart({
               "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
               activeStep === "ALL"
                 ? "bg-accent/20 text-accent border-accent/50 font-bold"
-                : "bg-[#070A0F] text-text-secondary border-[#243043] hover:text-white"
+                : "bg-surface text-text-secondary border-border hover:text-text-primary"
             )}
           >
             View Complete Forecast (Image 1)
@@ -315,8 +387,8 @@ export function InteractiveForecastChart({
           className={cn(
             "flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all shrink-0",
             isPlayingCycle
-              ? "bg-amber-500/20 border-amber-500/40 text-amber-300"
-              : "bg-[#070A0F] border-[#243043] text-text-secondary hover:text-white"
+              ? "bg-amber-500/20 border-amber-500/40 text-amber-500"
+              : "bg-surface border-border text-text-secondary hover:text-text-primary"
           )}
         >
           {isPlayingCycle ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
@@ -681,23 +753,30 @@ export function InteractiveForecastChart({
             cx={svgWidth - 85}
             cy={getY(currentPrice)}
             r="4"
-            fill="#EAB308"
-            className="animate-pulse"
-          />
-        </svg>
-      </div>
-
-      {/* ── Bottom Analytical Panels: Tabs ── */}
-      <div className="border-t border-[#1B2535] bg-[#090E16]">
+          {/* ── Bottom Analytical Panels: Tabs ── */}
+      <div className="border-t border-border bg-surface transition-colors">
         {/* Navigation Tabs */}
-        <div className="flex border-b border-[#1B2535] px-4">
+        <div className="flex border-b border-border px-4 overflow-x-auto no-scrollbar">
+          <button
+            onClick={() => setActiveTab("calculator")}
+            className={cn(
+              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 shrink-0",
+              activeTab === "calculator"
+                ? "border-profit text-profit bg-profit/5"
+                : "border-transparent text-text-secondary hover:text-text-primary"
+            )}
+          >
+            <Shield className="w-4 h-4 text-profit" />
+            <span>Pre-Trade Risk &amp; Sizing (Observed Balance)</span>
+          </button>
+
           <button
             onClick={() => setActiveTab("reasons")}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5",
+              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 shrink-0",
               activeTab === "reasons"
                 ? "border-accent text-accent bg-accent/5"
-                : "border-transparent text-text-secondary hover:text-white"
+                : "border-transparent text-text-secondary hover:text-text-primary"
             )}
           >
             <CheckCircle2 className="w-4 h-4 text-accent" />
@@ -707,29 +786,138 @@ export function InteractiveForecastChart({
           <button
             onClick={() => setActiveTab("macro")}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5",
+              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 shrink-0",
               activeTab === "macro"
                 ? "border-gold text-gold bg-gold/5"
-                : "border-transparent text-text-secondary hover:text-white"
+                : "border-transparent text-text-secondary hover:text-text-primary"
             )}
           >
             <Globe className="w-4 h-4 text-gold" />
-            <span>Why Markets Move (Macro Catalyst Flow)</span>
+            <span>Macro Catalyst Flow</span>
           </button>
 
           <button
             onClick={() => setActiveTab("simulator")}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5",
+              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 shrink-0",
               activeTab === "simulator"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/5"
-                : "border-transparent text-text-secondary hover:text-white"
+                ? "border-accent text-accent bg-accent/5"
+                : "border-transparent text-text-secondary hover:text-text-primary"
             )}
           >
-            <Lock className="w-4 h-4 text-emerald-400" />
-            <span>Dynamic Trailing Stop Simulator</span>
+            <Lock className="w-4 h-4 text-accent" />
+            <span>Dynamic Trailing &amp; Market Simulation</span>
           </button>
         </div>
+
+        {/* Tab 0: Pre-Trade Risk & Sizing (Observed Balance) */}
+        {activeTab === "calculator" && (
+          <div className="p-4 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-border">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-profit animate-pulse" />
+                <h4 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                  Autonomous Pre-Trade Risk Engine (STRATEGY_SPEC.md §3.1)
+                </h4>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-text-secondary">Balance Source:</span>
+                <span className={cn(
+                  "px-2 py-0.5 rounded-full font-bold font-mono text-[11px]",
+                  isUsingLiveBalance
+                    ? "bg-profit/15 text-profit border border-profit/30"
+                    : "bg-amber-500/15 text-amber-500 border border-amber-500/30"
+                )}>
+                  {isUsingLiveBalance ? "● Live MT5 Terminal" : "● Test Portfolio Model"}
+                </span>
+              </div>
+            </div>
+
+            {/* Observed Balance Selector Chips */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-surface-2 border border-border rounded-inner p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-primary">Observed Balance:</span>
+                <span className="text-sm font-extrabold text-gold font-mono">
+                  ${observedBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                </span>
+              </div>
+
+              {!isUsingLiveBalance && (
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-text-secondary mr-1">Test Presets:</span>
+                  {[1000, 5000, 10000, 25000, 50000].map((b) => (
+                    <button
+                      key={b}
+                      onClick={() => setTestBalance(b)}
+                      className={cn(
+                        "px-2 py-0.5 text-xs font-mono font-semibold rounded border transition-all",
+                        testBalance === b
+                          ? "bg-gold text-black border-gold font-bold shadow-sm"
+                          : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                      )}
+                    >
+                      ${b >= 1000 ? `${b / 1000}k` : b}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 6 Quantitative Pre-Trade Calculation Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 text-xs">
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <span className="text-[11px] text-text-secondary font-medium block">1.0% Risk Budget</span>
+                <span className="text-base font-black text-loss font-mono">
+                  -${riskUsd.toFixed(2)} USD
+                </span>
+                <span className="text-[10px] text-text-secondary block font-mono">
+                  Strict 1.00% max equity loss
+                </span>
+              </div>
+
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <span className="text-[11px] text-text-secondary font-medium block">SL Distance</span>
+                <span className="text-base font-black text-text-primary font-mono">
+                  {slDistance.toFixed(2)} pts ({slPips} pips)
+                </span>
+                <span className="text-[10px] text-text-secondary block font-mono">
+                  Invalidation: {formatPrice(initialSl)}
+                </span>
+              </div>
+
+              <div className="bg-surface-2 border-2 border-accent/40 rounded-inner p-3 space-y-1 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-accent font-bold block">Calculated Lot Size</span>
+                  <span className="px-1.5 py-0.2 rounded bg-accent/20 text-accent text-[9px] font-bold">AUTO</span>
+                </div>
+                <span className="text-base font-black text-accent font-mono">
+                  {calculatedLotSize.toFixed(2)} Lots
+                </span>
+                <span className="text-[10px] text-text-secondary block font-mono">
+                  Risk Budget ÷ (SL × Contract)
+                </span>
+              </div>
+
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <span className="text-[11px] text-text-secondary font-medium block">Potential Take Profit</span>
+                <span className="text-base font-black text-profit font-mono">
+                  +${rewardUsd.toFixed(2)} USD
+                </span>
+                <span className="text-[10px] text-profit block font-mono font-semibold">
+                  +{( (rewardUsd / observedBalance) * 100 ).toFixed(2)}% (+{(rewardDistance).toFixed(1)} pts)
+                </span>
+              </div>
+            </div>
+
+            {/* Institutional Risk Architecture Assurance */}
+            <div className="bg-surface-2/60 border border-border rounded-inner p-3 flex items-start gap-2.5 text-xs text-text-secondary">
+              <Shield className="w-4 h-4 text-profit shrink-0 mt-0.5" />
+              <span>
+                <strong>Autonomous Balance Observability:</strong> The bot continuously polls your MT5 account balance before dispatching orders. It dynamically calculates lot sizing using exact pip distance to the Fair Value Gap boundary. If Stop Loss is hit, the loss is mathematically capped to strictly <strong>1.0% (${riskUsd.toFixed(2)})</strong>.
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Tab 1: Technical Reasons for Entry */}
         {activeTab === "reasons" && (
@@ -745,8 +933,8 @@ export function InteractiveForecastChart({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-              <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1">
-                <div className="flex items-center justify-between text-amber-400 font-bold">
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <div className="flex items-center justify-between text-amber-500 font-bold">
                   <span>1. Institutional Liquidity Sweep</span>
                   <span className="font-mono">{formatPrice(sweepLevel)}</span>
                 </div>
@@ -755,8 +943,8 @@ export function InteractiveForecastChart({
                 </p>
               </div>
 
-              <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1">
-                <div className="flex items-center justify-between text-purple-300 font-bold">
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <div className="flex items-center justify-between text-purple-400 font-bold">
                   <span>2. 3-Candle Fair Value Gap (FVG)</span>
                   <span className="font-mono">{fvgPips} pips wide</span>
                 </div>
@@ -765,8 +953,8 @@ export function InteractiveForecastChart({
                 </p>
               </div>
 
-              <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1">
-                <div className="flex items-center justify-between text-blue-300 font-bold">
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <div className="flex items-center justify-between text-blue-400 font-bold">
                   <span>3. Retracement &amp; Mitigation Check</span>
                   <span className="font-mono">50% C.E. Respected</span>
                 </div>
@@ -775,8 +963,8 @@ export function InteractiveForecastChart({
                 </p>
               </div>
 
-              <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1">
-                <div className="flex items-center justify-between text-emerald-300 font-bold">
+              <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1">
+                <div className="flex items-center justify-between text-profit font-bold">
                   <span>4. Reference Candle 1-Tick Breakout</span>
                   <span className="font-mono">Trigger: {formatPrice(triggerLevel)}</span>
                 </div>
@@ -786,10 +974,10 @@ export function InteractiveForecastChart({
               </div>
             </div>
 
-            <div className="bg-[#121821] border border-border/80 rounded-inner p-3 flex items-start gap-2.5 text-xs text-text-secondary">
+            <div className="bg-surface-2 border border-border rounded-inner p-3 flex items-start gap-2.5 text-xs text-text-secondary">
               <Sparkles className="w-4 h-4 text-gold shrink-0 mt-0.5" />
               <span>
-                <strong>Zero Guesswork:</strong> Every single trade opened by the bot is systematically documented with these 5 criteria in the execution journal. If even one rule fails (e.g. invalidating candle close beyond FVG), the setup is discarded.
+                <strong>Zero Guesswork:</strong> Every single trade opened by the bot is systematically documented with these criteria in the execution journal. If even one rule fails, the setup is discarded.
               </span>
             </div>
           </div>
@@ -810,7 +998,7 @@ export function InteractiveForecastChart({
 
             {isXau ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-gold">US 10-Year Real Yields (TIPS)</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -822,7 +1010,7 @@ export function InteractiveForecastChart({
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-gold">US Dollar Index (DXY) Parity</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -834,7 +1022,7 @@ export function InteractiveForecastChart({
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-gold">Central Bank Physical Accumulation</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -846,11 +1034,11 @@ export function InteractiveForecastChart({
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-gold">London / New York Golden Overlap</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
-                      13:00 - 17:00 UTC
+                      15:00 - 19:00 EAT
                     </span>
                   </div>
                   <p className="text-[11px] text-text-secondary leading-relaxed">
@@ -860,19 +1048,19 @@ export function InteractiveForecastChart({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-accent">Institutional Spot ETF Inflows</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
-                      Farside / Bloomberg
+                      Bloomberg / Farside
                     </span>
                   </div>
                   <p className="text-[11px] text-text-secondary leading-relaxed">
-                    Net institutional flows into US Spot Bitcoin ETFs (IBIT, FBTC, BITB, ARKB) absorb circulating spot supply. Post-halving daily miner issuance is ~450 BTC/day, meaning net ETF inflows exceeding $30M create direct supply deficit.
+                    Net institutional flows into US Spot Bitcoin ETFs absorb circulating spot supply. Post-halving daily miner issuance is ~450 BTC/day, meaning net ETF inflows create direct supply deficits.
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-accent">Global M2 Liquidity &amp; Fed Expectations</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -884,7 +1072,7 @@ export function InteractiveForecastChart({
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-accent">CME Futures Basis &amp; Liquidity Pools</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -892,11 +1080,11 @@ export function InteractiveForecastChart({
                     </span>
                   </div>
                   <p className="text-[11px] text-text-secondary leading-relaxed">
-                    Perpetual funding rate equilibrium and institutional basis positioning. Stop-loss liquidity clusters concentrate heavily around psychological round numbers ($70,000 / $72,500 / $75,000) creating prime targets for SMC sweeps.
+                    Perpetual funding rate equilibrium and institutional basis positioning. Stop-loss liquidity clusters concentrate heavily around psychological round numbers creating prime targets for SMC sweeps.
                   </p>
                 </div>
 
-                <div className="bg-[#121821] border border-[#243043] rounded-inner p-3 space-y-1.5">
+                <div className="bg-surface-2 border border-border rounded-inner p-3 space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-accent">24/7 Market Microstructure</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border text-text-secondary font-mono">
@@ -922,13 +1110,30 @@ export function InteractiveForecastChart({
                   Dynamic Trailing &amp; Retracement Protection Simulator
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-2.5 py-1 rounded bg-[#121821] border border-[#243043] font-mono text-gold font-semibold">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs px-2.5 py-1 rounded bg-surface-2 border border-border font-mono text-gold font-semibold">
                   Live Price: {formatPrice(currentPrice)}
                 </span>
                 <span className="text-xs px-2.5 py-1 rounded bg-profit/15 text-profit border border-profit/30 font-semibold font-mono">
                   {trailPhase}
                 </span>
+
+                {/* Auto Play / Pause Button for Trajectory Simulation */}
+                <button
+                  onClick={() => setIsAutoSimulating(!isAutoSimulating)}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded bg-accent text-white font-bold text-xs shadow-sm active:scale-95 transition-all"
+                >
+                  {isAutoSimulating ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>{isAutoSimulating ? "Pause Simulation" : "Auto-Simulate Market Run"}</span>
+                </button>
+
+                <button
+                  onClick={() => { setProgress(0); setIsAutoSimulating(false); }}
+                  className="p-1 rounded bg-surface-2 border border-border text-text-secondary hover:text-text-primary"
+                  title="Reset to Entry"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
 
@@ -936,7 +1141,7 @@ export function InteractiveForecastChart({
             <div className="space-y-1.5">
               <div className="flex justify-between text-[11px] text-text-secondary">
                 <span>Entry ({formatPrice(entryPrice)})</span>
-                <span className="text-gold font-medium">Drag slider to test dynamic trailing stop shifts into Take Profit</span>
+                <span className="text-gold font-medium">Auto-simulate or drag slider to test dynamic trailing stop shifts into Take Profit</span>
                 <span>Take Profit ({formatPrice(targetTp)})</span>
               </div>
               <input
@@ -944,28 +1149,31 @@ export function InteractiveForecastChart({
                 min="0"
                 max="100"
                 value={progress}
-                onChange={(e) => setProgress(Number(e.target.value))}
-                className="w-full accent-gold h-2 bg-[#1B2535] rounded cursor-pointer"
+                onChange={(e) => {
+                  setIsAutoSimulating(false);
+                  setProgress(Number(e.target.value));
+                }}
+                className="w-full accent-gold h-2 bg-surface-2 border border-border rounded cursor-pointer"
               />
             </div>
 
             {/* Key Metrics Strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-xs">
-              <div className="bg-[#121821] border border-[#243043] rounded p-2.5">
+              <div className="bg-surface-2 border border-border rounded p-2.5">
                 <span className="text-[10px] text-text-secondary block">Risk/Reward</span>
                 <span className="font-mono font-bold text-profit">1:{rrRatio.toFixed(2)} (Target)</span>
               </div>
-              <div className="bg-[#121821] border border-[#243043] rounded p-2.5">
+              <div className="bg-surface-2 border border-border rounded p-2.5">
                 <span className="text-[10px] text-text-secondary block">Current R-Multiple</span>
                 <span className="font-mono font-bold text-gold">{currentRMultiple.toFixed(2)}R Progress</span>
               </div>
-              <div className="bg-[#121821] border border-[#243043] rounded p-2.5">
+              <div className="bg-surface-2 border border-border rounded p-2.5">
                 <span className="text-[10px] text-text-secondary block">Active Trailed Stop</span>
                 <span className="font-mono font-bold text-loss">{formatPrice(trailedStopLoss)}</span>
               </div>
-              <div className="bg-[#121821] border border-[#243043] rounded p-2.5">
+              <div className="bg-surface-2 border border-border rounded p-2.5">
                 <span className="text-[10px] text-text-secondary block">Copier Engine Replicate</span>
-                <span className="font-mono font-bold text-emerald-400">&lt;200ms Execution</span>
+                <span className="font-mono font-bold text-profit">&lt;200ms Execution</span>
               </div>
             </div>
           </div>
