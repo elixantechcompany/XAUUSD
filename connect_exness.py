@@ -603,28 +603,33 @@ def connect_terminal(args):
         print("[FATAL] MetaTrader5 package is not installed.")
         sys.exit(1)
 
-    print("[1/4] Initializing MetaTrader 5 IPC connection...")
-    if not mt5.initialize():
-        print(f"[ERROR] mt5.initialize() failed: {mt5.last_error()}")
-        sys.exit(1)
+    print("[1/4] Initializing MetaTrader 5 IPC connection (with auto-retry)...")
+    while True:
+        if mt5.initialize():
+            break
+        print(f"[RETRY] mt5.initialize() waiting for MT5 IPC ({mt5.last_error()})... retrying in 3s")
+        time.sleep(3)
 
     if args.login and args.password and args.server:
         print(f"[2/4] Logging in to Exness account #{args.login} on {args.server}...")
         ok = mt5.login(login=args.login, password=args.password, server=args.server)
         if not ok:
-            print(f"[ERROR] mt5.login() failed: {mt5.last_error()}")
-            sys.exit(1)
-        try:
-            cred_mgr = CredentialManager()
-            cred_mgr.store_credentials(account_id=args.login, password=args.password, server=args.server)
-            print("[SECURE] Saved trading credentials in Windows Credential Manager.")
-        except Exception:
-            pass
+            print(f"[WARN] mt5.login() returned: {mt5.last_error()} (continuing with active terminal session)")
+        else:
+            try:
+                cred_mgr = CredentialManager()
+                cred_mgr.store_credentials(account_id=args.login, password=args.password, server=args.server)
+                print("[SECURE] Saved trading credentials in Windows Credential Manager.")
+            except Exception:
+                pass
 
-    info = mt5.account_info()
-    if not info:
-        print("[ERROR] No active account in MT5.")
-        sys.exit(1)
+    info = None
+    while not info:
+        info = mt5.account_info()
+        if not info:
+            print("[RETRY] Waiting for active MT5 account session... retrying in 3s")
+            mt5.initialize()
+            time.sleep(3)
 
     return mt5, info
 
