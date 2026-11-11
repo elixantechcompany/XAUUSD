@@ -208,16 +208,16 @@ export function InteractiveForecastChart({
       ? account.balance
       : null;
 
-  const [testBalance, setTestBalance] = useState<number>(50.0); // Default to $50 small account as requested
-  const [customBalanceInput, setCustomBalanceInput] = useState<string>("50");
-  const [isUsingLiveBalance, setIsUsingLiveBalance] = useState(false);
+  const [testBalance, setTestBalance] = useState<number>(500.0);
+  const [customBalanceInput, setCustomBalanceInput] = useState<string>("500");
+  const [isUsingLiveBalance, setIsUsingLiveBalance] = useState(true);
 
-  // Sizing mode: Small Account Fast-Growth (2.5%) vs Institutional (1.0%)
-  const [sizingMode, setSizingMode] = useState<"FAST_GROWTH" | "CONSERVATIVE">("FAST_GROWTH");
+  // Sizing mode: Institutional 1.0% - 1.5% Risk Guard vs Fast-Growth (2.5%)
+  const [sizingMode, setSizingMode] = useState<"FAST_GROWTH" | "CONSERVATIVE">("CONSERVATIVE");
 
-  const effectiveBalance = isUsingLiveBalance && liveBalance !== null ? liveBalance : testBalance;
+  const effectiveBalance = isUsingLiveBalance && liveBalance !== null ? liveBalance : (liveBalance ?? testBalance);
 
-  // Small accounts ($50 - $500) use 2.5% to compound faster, while capping maximum downside
+  // Institutional 1.0% risk per trade (or 2.5% in fast-growth mode)
   const riskPercent = sizingMode === "FAST_GROWTH" ? 2.5 : 1.0;
   const riskUsd = effectiveBalance * (riskPercent / 100);
 
@@ -227,8 +227,9 @@ export function InteractiveForecastChart({
 
   // Dynamic Lot Sizing Formula: Lot = Risk Budget / (SL Distance * Point Value)
   const rawLotSize = slDistance > 0 ? riskUsd / (slDistance * pointValuePerLot) : 0.01;
-  // Quantize strictly to broker minimum 0.01 lot step
-  const calculatedLotSize = Math.max(0.01, Math.min(100.0, Math.floor(rawLotSize * 100) / 100));
+  // Quantize strictly to broker minimum 0.01 lot step and safe account ceiling
+  const maxSafeLot = Math.max(0.01, Math.floor((effectiveBalance / 150) * 0.05 * 100) / 100);
+  const calculatedLotSize = Math.max(0.01, Math.min(maxSafeLot, Math.floor(rawLotSize * 100) / 100));
 
   // Actual dollar risk and reward based on quantized lot
   const actualRiskUsd = slDistance * pointValuePerLot * calculatedLotSize;

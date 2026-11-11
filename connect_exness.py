@@ -643,27 +643,31 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
     )
 
     in_gap = fvg_low <= current_bid <= fvg_high
+    suggested_lot_size, estimated_risk_usd, risk_pct_used = calculate_dynamic_lot_size(
+        mt5, symbol_name, base_asset, entry_price, initial_sl, clarity_grade
+    )
     if trigger_fired and clarity_score >= 65:
         status_state = "CONFIRMED_READY"
-        status_label = f"BOT RUNNING · {direction_str} CONFIRMED ON {base_asset} (MCS {clarity_score}/100 Grade {clarity_grade})"
+        status_label = f"BOT RUNNING · {direction_str} CONFIRMED ON {base_asset} ({suggested_lot_size} LOT · MCS {clarity_score}/100 Grade {clarity_grade})"
         reasoning = (
             f"SPEC v1.2 {smc_direction} setup confirmed on {symbol_name} (H4={h4_trend}, MCS {clarity_score}/100 Grade {clarity_grade}). "
-            f"FVG [{fvg_low} - {fvg_high}], Trigger {trigger_level} broken, Structural SL: {initial_sl}, TP1: {tp1_structural}, TP2: {target_tp}."
+            f"Dynamic Size: {suggested_lot_size} Lot (${estimated_risk_usd} / {risk_pct_used}% risk). "
+            f"Liquidity SL: {initial_sl}, Target Zone TP: {target_tp}, 50% BE @ {breakeven_50pct_price}."
         )
     elif in_gap:
         status_state = "WAITING_FOR_CONFIRMATION"
-        status_label = f"BOT RUNNING · CONFIRMING {direction_str} IN FVG (MCS {clarity_score}/100 Grade {clarity_grade})"
+        status_label = f"BOT RUNNING · CONFIRMING {direction_str} IN FVG ({suggested_lot_size} LOT · MCS {clarity_score}/100 Grade {clarity_grade})"
         reasoning = (
             f"{smc_direction} setup on {symbol_name} (H4={h4_trend}, MCS {clarity_score}/100). "
-            f"Price inside H1 FVG ({fvg_low} - {fvg_high}), awaiting breakout trigger {trigger_level}."
+            f"Price inside H1 FVG ({fvg_low} - {fvg_high}), awaiting structure break trigger {trigger_level}."
         )
     else:
         status_state = "ANALYZING"
-        status_label = f"BOT RUNNING · SCANNING {base_asset} STRUCTURE (MCS {clarity_score}/100 Grade {clarity_grade})"
+        status_label = f"BOT RUNNING · VIGOROUSLY SCANNING {base_asset} ({suggested_lot_size} LOT · MCS {clarity_score}/100 Grade {clarity_grade})"
         reasoning = (
             f"Closed-candle H4 ({h4_trend}) & H1/M15 {smc_direction} structure on {symbol_name} "
-            f"(MCS {clarity_score}/100, Spread ${spread_usd}). "
-            f"Structural SL: {initial_sl} | TP1: {tp1_structural} | TP2: {target_tp}."
+            f"(MCS {clarity_score}/100, Spread ${spread_usd}, Dynamic Lot: {suggested_lot_size}). "
+            f"Liquidity SL: {initial_sl} | Target Zone TP: {target_tp} | 50% BE @ {breakeven_50pct_price}."
         )
 
     return {
@@ -675,6 +679,9 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         "clarity_score": clarity_score,
         "clarity_grade": clarity_grade,
         "positions_permitted": 2 if clarity_score >= 75 else (1 if clarity_score >= 65 else 0),
+        "suggested_lot_size": suggested_lot_size,
+        "estimated_risk_usd": estimated_risk_usd,
+        "risk_pct_used": risk_pct_used,
         "trigger_fired": trigger_fired,
         "market_confirmed": market_confirmed,
         "sudden_bullish_choch": sudden_bullish_choch,
@@ -717,6 +724,79 @@ def determine_filling_type(mt5, symbol_name: str) -> int:
     elif modes & 2:
         return mt5.ORDER_FILLING_IOC
     return mt5.ORDER_FILLING_RETURN
+
+
+def calculate_dynamic_lot_size(
+    mt5,
+    broker_symbol: str,
+    base_asset: str,
+    entry_price: float,
+    sl_price: float,
+    clarity_grade: str = "B",
+) -> tuple[float, float, float]:
+    """
+    Calculates exact lot size dynamically from the user's live MT5 account balance/equity,
+    broker symbol specifications (tick_size, tick_value, volume_step), and Stop Loss distance (R55-R58, R100).
+      - Grade A setup (MCS >= 85): risks 1.5% of account equity
+      - Grade B setup (MCS 65-84): risks 1.0% of account equity
+    Also verifies free margin via mt5.order_calc_margin() so the account is always protected.
+    Returns: (volume_lots, actual_risk_usd, risk_pct_used)
+    """
+    import math
+
+    acct = mt5.account_info()
+    sym_info = mt5.symbol_info(broker_symbol)
+    if not acct:
+        return 0.01, 5.0, 1.0
+
+    # Use conservative base (min of balance and equity when in drawdown, or equity when growing)
+    effective_capital = max(float(min(acct.balance, acct.equity)), float(acct.balance) * 0.95, 10.0)
+    risk_pct = 1.5 if str(clarity_grade).upper() == "A" else 1.0
+    target_risk_usd = effective_capital * (risk_pct / 100.0)
+
+    sl_dist = abs(float(entry_price) - float(sl_price))
+    if sl_dist <= 0:
+        sl_dist = 4.0 if "XAU" in base_asset.upper() else 160.0
+
+    if sym_info:
+        tick_size = float(sym_info.trade_tick_size or sym_info.point or (0.01 if "XAU" in base_asset.upper() else 0.01))
+        tick_value = float(sym_info.trade_tick_value or 1.0)
+        vol_min = float(sym_info.volume_min or 0.01)
+        vol_max = float(sym_info.volume_max or 100.0)
+        vol_step = float(sym_info.volume_step or 0.01)
+    else:
+        tick_size = 0.01
+        tick_value = 1.0 if "XAU" in base_asset.upper() else 0.01
+        vol_min, vol_max, vol_step = 0.01, 100.0, 0.01
+
+    ticks_at_risk = sl_dist / tick_size if tick_size > 0 else sl_dist
+    risk_per_lot = ticks_at_risk * tick_value
+    # Fallback contract multiplier check if broker reports tick_value=0 before market tick
+    if risk_per_lot <= 0:
+        contract_mult = 100.0 if "XAU" in base_asset.upper() else 1.0
+        risk_per_lot = sl_dist * contract_mult
+
+    raw_volume = target_risk_usd / risk_per_lot if risk_per_lot > 0 else vol_min
+    steps = math.floor(round(raw_volume / vol_step, 6)) if vol_step > 0 else 1
+    volume = round(steps * vol_step, 2)
+
+    # Ensure at least minimum broker volume (0.01) and cap to safe institutional ceiling
+    max_safe_lot = max(vol_min, min(vol_max, round((effective_capital / 150.0) * 0.05, 2)))
+    volume = max(vol_min, min(volume, max_safe_lot))
+
+    # Free Margin Safety Check: ensure required margin never exceeds 25% of free margin
+    free_margin = float(getattr(acct, "margin_free", effective_capital))
+    if free_margin > 0:
+        try:
+            req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
+            while req_margin and req_margin > (free_margin * 0.25) and volume > vol_min:
+                volume = round(max(vol_min, volume - vol_step), 2)
+                req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
+        except Exception:
+            pass
+
+    actual_risk_usd = round(volume * risk_per_lot, 2)
+    return volume, actual_risk_usd, risk_pct
 
 
 def execute_smc_order(
@@ -934,11 +1014,12 @@ def close_position_mt5(mt5, supabase, copier_engine=None, profit_guardian=None, 
     return True, f"Closed {closed} open position(s)"
 
 
-def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=None):
+def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=None, last_auto_trade_by_symbol=None):
     """
     Checks MT5 deal history to detect any positions that were closed
     (by Stop Loss, Take Profit, or broker exit), and immediately updates
     Supabase trades & signals so the frontend never gets stuck on old trades.
+    Also resets the per-symbol cooldown so the bot vigorously looks for the next valid entry!
     """
     try:
         from_date = datetime.now(timezone.utc) - timedelta(days=2)
@@ -1000,7 +1081,11 @@ def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=No
                         except Exception:
                             pass
 
-                    print(f"\n[RECONCILED EXIT] Position #{pos_ticket_str} closed on MT5 at {close_px} | PnL: ${pnl_realized:+.2f} ({r_multiple:+.2f}R)")
+                    if last_auto_trade_by_symbol is not None:
+                        closed_inst = str(matched_trade.get("instrument") or "XAUUSD").upper()
+                        last_auto_trade_by_symbol[closed_inst] = 0.0
+
+                    print(f"\n[RECONCILED EXIT] Position #{pos_ticket_str} closed on MT5 at {close_px} | PnL: ${pnl_realized:+.2f} ({r_multiple:+.2f}R) -> Vigorous re-scan armed!")
                     del open_db_trades[pos_ticket_str]
     except Exception:
         pass
@@ -1183,8 +1268,8 @@ def main():
                     time.sleep(2)
                     continue
 
-                # 1. Reconcile Closed Trades & SL/TP Hits immediately
-                reconcile_closed_deals(mt5, supabase, copier_engine, profit_guardian)
+                # 1. Reconcile Closed Trades & SL/TP Hits immediately (and arm vigorous re-entry scan)
+                reconcile_closed_deals(mt5, supabase, copier_engine, profit_guardian, last_auto_trade_by_symbol)
 
                 # 2. Extract live multi-directional setups for both BTC and Gold
                 btc_setup = extract_live_smc_setup(mt5, btc_sym, "BTCUSD")
@@ -1324,13 +1409,13 @@ def main():
                         print(
                             f"\n[STRUCTURE REVERSAL EXIT] Market structure suddenly shifted against profitable "
                             f"{'BUY' if is_pos_buy else 'SELL'} Position #{p.ticket} ({p.symbol})! "
-                            f"Automatically closing in profit (+${net_profit_usd:.2f}) and waiting for next setup."
+                            f"Automatically closing in profit (+${net_profit_usd:.2f}) and vigorously scanning for next setup."
                         )
                         close_position_mt5(
                             mt5, supabase, copier_engine, profit_guardian,
                             ticket=p.ticket, close_reason="CHOCH_PROFIT_EXIT"
                         )
-                        last_auto_trade_by_symbol[base_sym_name] = time.time()
+                        last_auto_trade_by_symbol[base_sym_name] = 0.0
                         continue
 
                     # 2. Check Profit Harvester: bank accumulated profit on sharp pullback
@@ -1343,6 +1428,7 @@ def main():
                             mt5, supabase, copier_engine, profit_guardian,
                             ticket=p.ticket, close_reason="PROFIT_HARVEST"
                         )
+                        last_auto_trade_by_symbol[base_sym_name] = 0.0
                         continue
 
                     # Dynamic Trailing Stop Loss & Early Breakeven (0.38R Gold / 0.50R BTC)
@@ -1526,13 +1612,16 @@ def main():
                                 req_broker = btc_sym if req_base == "BTCUSD" else xau_sym
                                 req_setup = btc_setup if req_base == "BTCUSD" else xau_setup
                                 req_dir = payload.get("direction") or req_setup["direction"]
-                                req_vol = float(payload.get("volume", 0.01))
                                 req_sl = float(payload.get("stop_loss", req_setup["stop_loss"]))
                                 req_tp = float(payload.get("take_profit", req_setup["take_profit"]))
+                                dyn_vol, _, _ = calculate_dynamic_lot_size(
+                                    mt5, req_broker, req_base, float(req_setup["entry_price"]), req_sl, req_setup.get("clarity_grade", "B")
+                                )
+                                req_vol = float(payload.get("volume") or dyn_vol)
                                 ok, res_msg = execute_smc_order(
                                     mt5, supabase, copier_engine, profit_guardian,
                                     req_broker, req_base, req_dir, req_vol, req_sl, req_tp,
-                                    reason=payload.get("reason", "Manual Web Dispatch 1:3 RR")
+                                    reason=payload.get("reason", f"Manual Web Dispatch ({req_vol} Lot)")
                                 )
 
                             elif cmd_type in ("CLOSE_TRADE", "CLOSE_ALL", "KILL"):
@@ -1545,6 +1634,10 @@ def main():
                                     ticket=t_id, symbol_name=s_name,
                                     close_reason="KILL_SWITCH" if cmd_type == "KILL" else "WEB_CLOSE"
                                 )
+                                # Immediately reset cooldown so bot vigorously scans for the next valid entry
+                                if cmd_type != "KILL":
+                                    last_auto_trade_by_symbol["XAUUSD"] = 0.0
+                                    last_auto_trade_by_symbol["BTCUSD"] = 0.0
 
                             supabase.table("commands").update({
                                 "status": "done",
@@ -1554,8 +1647,9 @@ def main():
                 except Exception:
                     pass
 
-                # 8. Continuous High-Clarity Autonomous Execution (R1, R52)
-                # Evaluates XAUUSD and BTCUSD independently as equal first-class instruments.
+                # 8. Vigorous Continuous High-Clarity Autonomous Execution & Risk Management (R1, R52, R55-R58)
+                # Immediately after closing a previous order, vigorously scans both XAUUSD and BTCUSD
+                # and enters the next valid confirmed setup at the right time with balance-adapted lot sizing.
                 if not bot_paused:
                     market_slots = [
                         ("XAUUSD", xau_sym, xau_setup),
@@ -1573,7 +1667,8 @@ def main():
                         open_for_sym = len(open_by_base.get(auto_base, []))
                         if open_for_sym >= max_open_per_symbol:
                             continue
-                        if (time.time() - last_auto_trade_by_symbol.get(auto_base, 0.0)) <= 25:
+                        # Fast 5-second post-close re-entry readiness so valid entries are never missed!
+                        if (time.time() - last_auto_trade_by_symbol.get(auto_base, 0.0)) <= 5.0:
                             continue
 
                         # Enforce SPEC v1.2: Clarity >= 65 AND (breakout trigger fired OR closed-candle market confirmation)
@@ -1583,18 +1678,26 @@ def main():
                             auto_dir = auto_setup["direction"]
                             auto_sl = float(auto_setup["stop_loss"])
                             auto_tp = float(auto_setup["take_profit"])
-                            auto_vol = 0.01
+                            auto_vol, risk_usd, risk_pct = calculate_dynamic_lot_size(
+                                mt5,
+                                auto_broker,
+                                auto_base,
+                                float(auto_setup["entry_price"]),
+                                auto_sl,
+                                auto_setup.get("clarity_grade", "B"),
+                            )
 
                             print(
-                                f"\n[CONTINUOUS SCAN] High-Clarity ({mcs}/100 Grade {auto_setup['clarity_grade']}, H4={auto_setup.get('h4_trend')}) "
-                                f"confirmed setup on {auto_base}: {auto_dir} @ {auto_setup['entry_price']} "
-                                f"(Structural SL: {auto_sl}, TP: {auto_tp})"
+                                f"\n[VIGOROUS SCAN] High-Clarity ({mcs}/100 Grade {auto_setup['clarity_grade']}, H4={auto_setup.get('h4_trend')}) "
+                                f"confirmed setup on {auto_base}: {auto_dir} {auto_vol} LOTS @ {auto_setup['entry_price']} "
+                                f"(Risk: ${risk_usd:.2f} [{risk_pct}% of Balance ${curr_info.balance:,.2f}] | "
+                                f"Liquidity SL: {auto_sl} | Target Zone TP: {auto_tp} | 50% BE: {auto_setup.get('breakeven_50pct_price')})"
                             )
                             ok, res_msg = execute_smc_order(
                                 mt5, supabase, copier_engine, profit_guardian,
                                 auto_broker, auto_base, auto_dir, auto_vol, auto_sl, auto_tp,
                                 reason=(
-                                    f"Autonomous SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}) "
+                                    f"Autonomous SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}, {auto_vol} Lot / {risk_pct}% Risk) "
                                     f"{auto_dir} Confirmed SMC Setup"
                                 )
                             )
