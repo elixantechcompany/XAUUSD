@@ -142,7 +142,7 @@ export function InteractiveForecastChart({
   useEffect(() => {
     setIsLiveLoading(true);
     fetchLiveMarketData().finally(() => setIsLiveLoading(false));
-    const interval = setInterval(fetchLiveMarketData, 3500);
+    const interval = setInterval(fetchLiveMarketData, 1500);
     return () => clearInterval(interval);
   }, [fetchLiveMarketData]);
 

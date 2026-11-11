@@ -882,7 +882,10 @@ def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=No
                 if pos_ticket_str in open_db_trades:
                     matched_trade = open_db_trades[pos_ticket_str]
                     close_dt = datetime.fromtimestamp(deal.time, tz=timezone.utc)
-                    pnl_realized = round(float(deal.profit), 2)
+                    pnl_realized = round(
+                        float(deal.profit) + float(getattr(deal, "swap", 0.0)) + float(getattr(deal, "commission", 0.0)),
+                        2,
+                    )
                     close_px = float(deal.price)
 
                     open_px = float(matched_trade.get("open_price") or close_px)
@@ -1167,31 +1170,76 @@ def main():
                             tp=cur_tp,
                         )
 
-                    # Ensure position exists in Supabase trades table so frontend always shows it
+                    # Ensure position AND its parent signal exist in Supabase so FK constraints never reject MT5 mobile/manual trades!
                     t_str = str(p.ticket)
+                    sig_id_str = f"sig_{base_sym_name.lower()}_{t_str}"
+                    open_dt_iso = datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat()
+                    net_profit_usd = round(
+                        float(p.profit) + float(getattr(p, "swap", 0.0)) + float(getattr(p, "commission", 0.0)),
+                        2,
+                    )
                     if t_str not in known_db_tickets:
+                        try:
+                            supabase.table("signals").upsert({
+                                "id": sig_id_str,
+                                "created_at": open_dt_iso,
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                                "instrument": base_sym_name,
+                                "timeframe": "H1",
+                                "direction": "BULLISH" if is_pos_buy else "BEARISH",
+                                "state": "POSITION_OPEN",
+                                "status": "taken",
+                                "entry": float(p.price_open),
+                                "stop_loss": cur_sl,
+                                "take_profit": cur_tp,
+                                "suggested_lot_size": float(p.volume),
+                                "estimated_risk_usd": round(abs(float(p.price_open) - cur_sl) * float(p.volume) * (100 if base_sym_name == "XAUUSD" else 1), 2),
+                                "rr_ratio": 3.0,
+                                "rejection_reason": "Live MT5 Position Synced",
+                                "strategy_version": "1.2",
+                            }).execute()
+                        except Exception:
+                            pass
+
                         try:
                             supabase.table("trades").upsert({
                                 "ticket": t_str,
-                                "signal_id": f"sig_{base_sym_name.lower()}_{t_str}",
+                                "signal_id": sig_id_str,
                                 "source": "bot",
                                 "instrument": base_sym_name,
                                 "side": "BULLISH" if is_pos_buy else "BEARISH",
                                 "lots": float(p.volume),
-                                "open_time": datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat(),
+                                "open_time": open_dt_iso,
                                 "open_price": float(p.price_open),
                                 "sl": cur_sl,
                                 "tp": cur_tp,
                                 "execution_mode": "demo",
-                                "pnl": round(float(p.profit), 2),
+                                "pnl": net_profit_usd,
                             }).execute()
                             known_db_tickets.add(t_str)
                         except Exception:
-                            pass
+                            # Fallback without signal_id if needed
+                            try:
+                                supabase.table("trades").upsert({
+                                    "ticket": t_str,
+                                    "source": "bot",
+                                    "instrument": base_sym_name,
+                                    "side": "BULLISH" if is_pos_buy else "BEARISH",
+                                    "lots": float(p.volume),
+                                    "open_time": open_dt_iso,
+                                    "open_price": float(p.price_open),
+                                    "sl": cur_sl,
+                                    "tp": cur_tp,
+                                    "execution_mode": "demo",
+                                    "pnl": net_profit_usd,
+                                }).execute()
+                                known_db_tickets.add(t_str)
+                            except Exception:
+                                pass
 
                     # Check Profit Harvester first: bank accumulated profit on sharp pullback
                     should_harvest, harvest_reason = profit_guardian.should_harvest_profit(
-                        p.ticket, float(p.price_current), float(p.profit)
+                        p.ticket, float(p.price_current), net_profit_usd
                     )
                     if should_harvest:
                         print(f"\n[PROFIT HARVESTER] Position #{p.ticket}: {harvest_reason}")
@@ -1201,7 +1249,7 @@ def main():
                         )
                         continue
 
-                    # Dynamic Trailing Stop Loss & Early Breakeven (0.50R)
+                    # Dynamic Trailing Stop Loss & Early Breakeven (0.38R Gold / 0.50R BTC)
                     cur_market_price = float(p.price_current)
                     should_mod, new_sl, reason = profit_guardian.update_price(p.ticket, cur_market_price)
                     if should_mod and new_sl is not None:
@@ -1217,11 +1265,13 @@ def main():
                         "base_symbol": base_sym_name,
                         "direction": "BUY" if is_pos_buy else "SELL",
                         "volume": float(p.volume),
+                        "open_time": open_dt_iso,
                         "price_open": float(p.price_open),
                         "price_current": float(p.price_current),
                         "sl": cur_sl,
                         "tp": cur_tp,
-                        "profit": round(float(p.profit), 2),
+                        "profit": net_profit_usd,
+                        "swap": round(float(getattr(p, "swap", 0.0)), 2),
                         "comment": str(p.comment),
                     }
                     active_positions_data.append(pos_item)
@@ -1292,7 +1342,7 @@ def main():
                     pass
 
                 # 6. Synchronize Account Snapshot
-                if time.time() - last_snapshot > 12:
+                if time.time() - last_snapshot > 3:
                     try:
                         supabase.table("accounts_snapshot").insert({
                             "ts": datetime.now(timezone.utc).isoformat(),
@@ -1470,7 +1520,7 @@ def main():
             except Exception as loop_err:
                 print(f"[RECOVERY] Transient loop error caught (resuming scan): {loop_err}")
 
-            time.sleep(2.5)
+            time.sleep(0.8)
 
     except KeyboardInterrupt:
         print("\n[STOPPED] MT5 Live Bridge cleanly terminated by user.")

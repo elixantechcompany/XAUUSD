@@ -22,7 +22,7 @@ import {
 } from "@/lib/supabase/queries";
 import { useBotStore } from "@/lib/store";
 
-const POLL_INTERVAL_MS = 8_000;   // 8 seconds — shows ONLINE within one cycle
+const POLL_INTERVAL_MS = 2_000;   // 2 seconds — ultra-responsive live sync with MT5 mobile/desktop
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const {

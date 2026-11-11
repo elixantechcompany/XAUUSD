@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getServiceHeaders, getSupabaseUrl } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
             open_positions: val.open_positions || [],
             data: symData,
           },
-          { headers: { "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2" } }
+          { headers: { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" } }
         );
       }
     }

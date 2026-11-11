@@ -30,7 +30,7 @@ export default function TradesPage() {
 
   useEffect(() => {
     fetchTradesList();
-    const interval = setInterval(fetchTradesList, 2000);
+    const interval = setInterval(fetchTradesList, 1000);
     return () => clearInterval(interval);
   }, [fetchTradesList]);
 
