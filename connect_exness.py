@@ -369,8 +369,8 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
             if detected_sweep is not None:
                 break
 
-    # 4. Part 3.D & Part 3.E (R21-R30): Market Confirmation & Reference Candle Breakout
-    # Check Market Confirmation on closed H1 or M15 candles (close strictly beyond preceding candle's high/low)
+    # 4. Part 3.D & Part 3.E (R21-R30): Market Structure Break (BOS/CHoCH) Confirmation & Reference Candle Breakout
+    # Verify that after liquidity is swept, price breaks market structure (closes strictly beyond preceding candle's high/low)
     h1_confirm = (
         MarketConfirmationChecker.check_market_confirmation(smc_direction, h1_candles[-1], h1_candles[-2])
         if len(h1_candles) >= 2
@@ -381,13 +381,44 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         if len(m15_candles) >= 2
         else False
     )
-    # Also check if confirmation occurred within the last 3 closed M15 bars in the same impulse
+    # Also check if structure break occurred within the last 3 closed M15 bars after the liquidity sweep
     recent_m15_confirm = (
         MarketConfirmationChecker.find_market_confirmation(smc_direction, m15_candles[-4:]) is not None
         if len(m15_candles) >= 4
         else False
     )
     market_confirmed = h1_confirm or m15_confirm or recent_m15_confirm
+
+    # Detect sudden opposing Market Structure Shift (CHoCH / Sudden Reversal) on M15/H1 closed candles:
+    # Used to immediately harvest and close all profitable open positions if market structure suddenly flips against them!
+    opposing_dir = "BEARISH" if is_bullish_setup else "BULLISH"
+    m15_bull_break = (
+        MarketConfirmationChecker.check_market_confirmation("BULLISH", m15_candles[-1], m15_candles[-2])
+        if len(m15_candles) >= 2
+        else False
+    )
+    m15_bear_break = (
+        MarketConfirmationChecker.check_market_confirmation("BEARISH", m15_candles[-1], m15_candles[-2])
+        if len(m15_candles) >= 2
+        else False
+    )
+    # Also check if M15 broke the most recent confirmed M15 swing high/low
+    latest_m15_sw_high = swing_det.latest_swing_high(m15_candles) if m15_candles else None
+    latest_m15_sw_low = swing_det.latest_swing_low(m15_candles) if m15_candles else None
+    sudden_bullish_choch = bool(
+        m15_candles
+        and (
+            (m15_bull_break and m15_ema_bull)
+            or (latest_m15_sw_high and m15_candles[-1].close > latest_m15_sw_high.level)
+        )
+    )
+    sudden_bearish_choch = bool(
+        m15_candles
+        and (
+            (m15_bear_break and (not m15_ema_bull))
+            or (latest_m15_sw_low and m15_candles[-1].close < latest_m15_sw_low.level)
+        )
+    )
 
     # Find Frozen Reference Candle (Part 3.E / R21-R24)
     ref_candle: ReferenceCandle | None = None
@@ -412,49 +443,64 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         tick_trig = BreakoutTriggerChecker.check_tick_breakout(smc_direction, ref_candle, current_bid, current_ask)
         trigger_fired = bool(candle_trig or tick_trig or market_confirmed)
 
-    # 5. R35-R37: Structural Stop Loss Calculation (beyond sweep extreme / swing structure + ATR buffer)
+    # 5. R35-R37: Stop Loss Placed on the Liquidity Sweep Candle Extreme (after Market Structure Break)
+    # When liquidity is swept and the order breaks market structure, SL is anchored directly to the
+    # Liquidity Sweep Candle's extreme wick (sweep.sweep_extreme) + protective ATR buffer (R35/R36).
     entry_price = round(current_ask if is_bullish_setup else current_bid, 2)
     sl_calc = StopLossCalculator(
         atr_period=14,
-        sl_buffer_atr_factor=0.10,
-        sl_buffer_min_ticks=5,
+        sl_buffer_atr_factor=0.05,
+        sl_buffer_min_ticks=2,
         tick_size=tick_size,
         trade_stops_level=stops_level,
         point=point,
     )
 
-    structural_sl: float | None = None
-    if selected_fvg is not None and detected_sweep is not None and len(h1_candles) >= 15:
-        calc_sl, _ = sl_calc.calculate(selected_fvg, detected_sweep, entry_price, h1_candles)
-        if calc_sl is not None:
-            # Verify SL is on the protective side of entry
-            if (is_bullish_setup and calc_sl < entry_price) or ((not is_bullish_setup) and calc_sl > entry_price):
-                structural_sl = round(calc_sl, 2)
+    liquidity_candle_sl: float | None = None
+    liquidity_candle_time: str | None = None
+    if detected_sweep is not None:
+        liquidity_candle_time = detected_sweep.sweep_candle.time.isoformat()
+        if selected_fvg is not None and len(h1_candles) >= 15:
+            calc_sl, _ = sl_calc.calculate(selected_fvg, detected_sweep, entry_price, h1_candles)
+            if calc_sl is not None:
+                if (is_bullish_setup and calc_sl < entry_price) or ((not is_bullish_setup) and calc_sl > entry_price):
+                    liquidity_candle_sl = round(calc_sl, 2)
+        if liquidity_candle_sl is None:
+            # Direct placement on the liquidity sweep candle's extreme wick + small buffer
+            buf = max(atr_val * 0.05, 0.35 if is_xau else 18.0)
+            cand_sl = (
+                detected_sweep.sweep_extreme - buf
+                if is_bullish_setup
+                else detected_sweep.sweep_extreme + buf
+            )
+            if (is_bullish_setup and cand_sl < entry_price) or ((not is_bullish_setup) and cand_sl > entry_price):
+                liquidity_candle_sl = round(cand_sl, 2)
 
-    # Calibrate safe structural SL bounds for XAUUSD ($4.00 - $9.50) and BTCUSD ($140 - $420)
-    # so Gold positions are never stopped out by $2 M15 noise wicks!
-    min_sl_dist = max(atr_val * 0.75, 4.20 if is_xau else 140.0)
-    max_sl_dist = max(atr_val * 1.45, 9.50 if is_xau else 420.0)
+    # Safe structural bounds so SL sits accurately on the liquidity sweep candle without being inside spread noise
+    min_sl_dist = max(atr_val * 0.55, 3.20 if is_xau else 120.0)
+    max_sl_dist = max(atr_val * 1.50, 10.50 if is_xau else 450.0)
 
-    if structural_sl is not None:
-        raw_dist = abs(entry_price - structural_sl)
+    if liquidity_candle_sl is not None:
+        raw_dist = abs(entry_price - liquidity_candle_sl)
         clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
     else:
-        # Use confirmed swing low/high + ATR buffer when available
+        # Fallback to most recent confirmed swing low/high candle wick
         if is_bullish_setup:
             sw_low = swing_det.latest_swing_low(m15_candles or h1_candles)
             ref_low = sw_low.level if (sw_low and sw_low.level < entry_price) else (entry_price - min_sl_dist)
-            raw_dist = abs(entry_price - (ref_low - atr_val * 0.15))
+            raw_dist = abs(entry_price - (ref_low - atr_val * 0.08))
         else:
             sw_high = swing_det.latest_swing_high(m15_candles or h1_candles)
             ref_high = sw_high.level if (sw_high and sw_high.level > entry_price) else (entry_price + min_sl_dist)
-            raw_dist = abs((ref_high + atr_val * 0.15) - entry_price)
+            raw_dist = abs((ref_high + atr_val * 0.08) - entry_price)
         clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
 
     initial_sl = round(entry_price - clamped_dist if is_bullish_setup else entry_price + clamped_dist, 2)
     sl_distance = round(abs(entry_price - initial_sl), 2)
 
-    # 6. R40-R42 & R101-R103: Structural Take Profit Detection (StructuralTPDetector)
+    # 6. R40-R42 & R101-R103: Target Zone (Demand / Supply / Liquidity Zone) Take Profit Placement
+    # Places Take Profit directly at the nearest unmitigated opposing institutional zone
+    # (target FVG boundary / swing liquidity zone) meeting at least 1:2.0 R:R so profits are reliably collected!
     tp_detector = StructuralTPDetector(
         tp1_min_rr=2.0,
         tp2_min_rr=3.0,
@@ -470,32 +516,57 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         active_fvgs=active_fvgs,
     )
 
-    if tp_result.tp2 is not None:
-        target_tp = round(tp_result.tp2.price, 2)
-        rr_target = round(tp_result.tp2.rr_ratio, 2)
-        tp1_structural = round(tp_result.tp1.price, 2) if tp_result.tp1 else round(
-            entry_price + sl_distance * 2.0 if is_bullish_setup else entry_price - sl_distance * 2.0, 2
-        )
-    elif tp_result.tp1 is not None:
+    if tp_result.tp1 is not None:
+        # Place primary Take Profit directly at TP1 structural target zone so the bot collects profit cleanly at the zone!
         tp1_structural = round(tp_result.tp1.price, 2)
-        # Use 1:3 RR for primary target if TP1 is between 2R and 3R
-        target_tp = round(
-            max(tp1_structural, entry_price + sl_distance * 3.0)
-            if is_bullish_setup
-            else min(tp1_structural, entry_price - sl_distance * 3.0),
-            2,
+        target_tp = tp1_structural
+        rr_target = round(tp_result.tp1.rr_ratio, 2)
+        tp2_structural = round(tp_result.tp2.price, 2) if tp_result.tp2 else round(
+            entry_price + sl_distance * 3.0 if is_bullish_setup else entry_price - sl_distance * 3.0, 2
         )
-        rr_target = round(abs(target_tp - entry_price) / sl_distance, 2) if sl_distance > 0 else 3.0
+    elif tp_result.tp2 is not None:
+        target_tp = round(tp_result.tp2.price, 2)
+        tp1_structural = target_tp
+        tp2_structural = target_tp
+        rr_target = round(tp_result.tp2.rr_ratio, 2)
     else:
-        rr_target = 3.0
-        tp1_structural = round(
-            entry_price + (sl_distance * 2.0) if is_bullish_setup else entry_price - (sl_distance * 2.0),
-            2,
+        # Also check M15 structural swing / FVG zone if H1 barrier wasn't in range
+        m15_tp_res = tp_detector.detect(
+            direction=smc_direction,
+            entry_price=entry_price,
+            sl_price=initial_sl,
+            h1_candles=m15_candles,
+            active_fvgs=[],
         )
-        target_tp = round(
-            entry_price + (sl_distance * rr_target) if is_bullish_setup else entry_price - (sl_distance * rr_target),
-            2,
-        )
+        if m15_tp_res.tp1 is not None:
+            tp1_structural = round(m15_tp_res.tp1.price, 2)
+            target_tp = tp1_structural
+            rr_target = round(m15_tp_res.tp1.rr_ratio, 2)
+            tp2_structural = round(
+                entry_price + sl_distance * 3.0 if is_bullish_setup else entry_price - sl_distance * 3.0, 2
+            )
+        else:
+            rr_target = 2.5
+            tp1_structural = round(
+                entry_price + (sl_distance * 2.0) if is_bullish_setup else entry_price - (sl_distance * 2.0),
+                2,
+            )
+            target_tp = round(
+                entry_price + (sl_distance * rr_target) if is_bullish_setup else entry_price - (sl_distance * rr_target),
+                2,
+            )
+            tp2_structural = round(
+                entry_price + (sl_distance * 3.0) if is_bullish_setup else entry_price - (sl_distance * 3.0),
+                2,
+            )
+
+    # Calculate the exact 50% Intended Profit price level where Breakeven is automatically triggered (R89/R90)
+    breakeven_50pct_price = round(
+        entry_price + abs(target_tp - entry_price) * 0.50
+        if is_bullish_setup
+        else entry_price - abs(target_tp - entry_price) * 0.50,
+        2,
+    )
 
     # 7. R99-R100: Market Clarity Engine (MCS-1 to MCS-7)
     clarity_engine = MarketClarityEngine(
@@ -606,6 +677,10 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         "positions_permitted": 2 if clarity_score >= 75 else (1 if clarity_score >= 65 else 0),
         "trigger_fired": trigger_fired,
         "market_confirmed": market_confirmed,
+        "sudden_bullish_choch": sudden_bullish_choch,
+        "sudden_bearish_choch": sudden_bearish_choch,
+        "liquidity_candle_time": liquidity_candle_time,
+        "breakeven_50pct_price": breakeven_50pct_price,
         "current_price": current_bid,
         "bid": current_bid,
         "ask": current_ask,
@@ -621,6 +696,7 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         "entry_price": entry_price,
         "stop_loss": initial_sl,
         "tp1_structural": tp1_structural,
+        "tp2_structural": tp2_structural,
         "take_profit": target_tp,
         "trigger_level": trigger_level,
         "rr_ratio": rr_target,
@@ -1237,7 +1313,27 @@ def main():
                             except Exception:
                                 pass
 
-                    # Check Profit Harvester first: bank accumulated profit on sharp pullback
+                    # 1. Sudden Market Structure Reversal (CHoCH) Check:
+                    # If the market suddenly changes structure against an open profitable order,
+                    # automatically close the profitable order immediately and wait for the next setup!
+                    structure_flipped_against_pos = (
+                        (is_pos_buy and (ref_setup.get("smc_direction") == "BEARISH" or ref_setup.get("sudden_bearish_choch")))
+                        or ((not is_pos_buy) and (ref_setup.get("smc_direction") == "BULLISH" or ref_setup.get("sudden_bullish_choch")))
+                    )
+                    if net_profit_usd > 0.05 and structure_flipped_against_pos:
+                        print(
+                            f"\n[STRUCTURE REVERSAL EXIT] Market structure suddenly shifted against profitable "
+                            f"{'BUY' if is_pos_buy else 'SELL'} Position #{p.ticket} ({p.symbol})! "
+                            f"Automatically closing in profit (+${net_profit_usd:.2f}) and waiting for next setup."
+                        )
+                        close_position_mt5(
+                            mt5, supabase, copier_engine, profit_guardian,
+                            ticket=p.ticket, close_reason="CHOCH_PROFIT_EXIT"
+                        )
+                        last_auto_trade_by_symbol[base_sym_name] = time.time()
+                        continue
+
+                    # 2. Check Profit Harvester: bank accumulated profit on sharp pullback
                     should_harvest, harvest_reason = profit_guardian.should_harvest_profit(
                         p.ticket, float(p.price_current), net_profit_usd
                     )

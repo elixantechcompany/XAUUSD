@@ -144,15 +144,27 @@ class ProfitGuardian:
                 return True
             return candidate > proposed_sl if is_bullish else candidate < proposed_sl
 
-        # ── 1. Breakeven Shift at breakeven_r ───────────────────────────────────
-        effective_be_r = min(self.breakeven_r, 0.38) if "XAU" in state.symbol.upper() else self.breakeven_r
-        if floating_r >= effective_be_r and not state.breakeven_activated:
+        # ── 1. Breakeven Shift at 50% of Intended Profit Target (TP) or breakeven_r (R89/R90) ──
+        target_profit_dist = abs(state.tp - state.entry_price) if state.tp and state.tp > 0 else 0.0
+        progress_to_tp = (current_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
+        peak_progress_to_tp = (peak_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
+
+        reached_50pct_of_tp = (progress_to_tp >= 0.50 or peak_progress_to_tp >= 0.50)
+        effective_be_r = min(self.breakeven_r, 0.50)
+
+        if (reached_50pct_of_tp or floating_r >= effective_be_r) and not state.breakeven_activated:
             buffer = 0.20 if "XAU" in state.symbol.upper() else 6.0
             new_be = state.entry_price + buffer if is_bullish else state.entry_price - buffer
             if _improves_sl(new_be):
                 proposed_sl = new_be
                 state.breakeven_activated = True
-                reason = f"BREAKEVEN: Trade reached {floating_r:.2f}R. SL moved to entry + buffer."
+                if reached_50pct_of_tp:
+                    reason = (
+                        f"BREAKEVEN_50PCT_TP: Trade reached {max(progress_to_tp, peak_progress_to_tp)*100:.1f}% "
+                        f"of intended profit target ({floating_r:.2f}R). SL moved to entry + buffer."
+                    )
+                else:
+                    reason = f"BREAKEVEN: Trade reached {floating_r:.2f}R. SL moved to entry + buffer."
 
         # ── 2. Structural Profit Lock at trailing_start_r and 2.0R ──────────────
         if floating_r >= 2.0:
