@@ -144,27 +144,55 @@ class ProfitGuardian:
                 return True
             return candidate > proposed_sl if is_bullish else candidate < proposed_sl
 
-        # ── 1. Breakeven Shift at 50% of Intended Profit Target (TP) or breakeven_r (R89/R90) ──
+        # ── 1. Multi-Stage Day-Trader Zero-Loss Shield & 50% TP Profit Lock (R89/R90) ──
         target_profit_dist = abs(state.tp - state.entry_price) if state.tp and state.tp > 0 else 0.0
         progress_to_tp = (current_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
         peak_progress_to_tp = (peak_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
+        best_progress = max(progress_to_tp, peak_progress_to_tp)
 
-        reached_50pct_of_tp = (progress_to_tp >= 0.50 or peak_progress_to_tp >= 0.50)
-        effective_be_r = min(self.breakeven_r, 0.50)
+        # Stage 1A: Early Zero-Loss Breakeven Shield at 25% of TP or breakeven_r
+        reached_early_shield = (best_progress >= 0.25 or floating_r >= min(self.breakeven_r, 0.30))
+        reached_50pct_of_tp = (best_progress >= 0.50 or floating_r >= self.breakeven_r)
 
-        if (reached_50pct_of_tp or floating_r >= effective_be_r) and not state.breakeven_activated:
-            buffer = 0.20 if "XAU" in state.symbol.upper() else 6.0
+        if (reached_early_shield or reached_50pct_of_tp) and not state.breakeven_activated:
+            buffer = 0.25 if "XAU" in state.symbol.upper() else 8.0
             new_be = state.entry_price + buffer if is_bullish else state.entry_price - buffer
             if _improves_sl(new_be):
                 proposed_sl = new_be
                 state.breakeven_activated = True
                 if reached_50pct_of_tp:
                     reason = (
-                        f"BREAKEVEN_50PCT_TP: Trade reached {max(progress_to_tp, peak_progress_to_tp)*100:.1f}% "
+                        f"BREAKEVEN_50PCT_TP: Trade reached {best_progress*100:.1f}% "
                         f"of intended profit target ({floating_r:.2f}R). SL moved to entry + buffer."
                     )
                 else:
-                    reason = f"BREAKEVEN: Trade reached {floating_r:.2f}R. SL moved to entry + buffer."
+                    reason = (
+                        f"ZERO_LOSS_SHIELD: Day-trade reached {best_progress*100:.1f}% of TP "
+                        f"({floating_r:.2f}R). SL moved to entry + buffer so position cannot lose."
+                    )
+
+        # Stage 1B: At 50% of Intended Profit Target, lock +20% of TP distance in guaranteed profit!
+        if best_progress >= 0.50 and target_profit_dist > 0:
+            lock_50_dist = max(target_profit_dist * 0.20, 0.35 if "XAU" in state.symbol.upper() else 12.0)
+            sl_50_lock = state.entry_price + lock_50_dist if is_bullish else state.entry_price - lock_50_dist
+            if (is_bullish and sl_50_lock > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or sl_50_lock < proposed_sl)):
+                proposed_sl = sl_50_lock
+                state.breakeven_activated = True
+                reason = (
+                    f"BREAKEVEN_50PCT_TP_LOCK: Order reached {best_progress*100:.1f}% of intended profit "
+                    f"({floating_r:.2f}R). SL locked in guaranteed profit at {round(proposed_sl, 2)}."
+                )
+
+        # Stage 1C: At 75% of Intended Profit Target, lock +50% of TP distance in guaranteed profit!
+        if best_progress >= 0.75 and target_profit_dist > 0:
+            lock_75_dist = target_profit_dist * 0.50
+            sl_75_lock = state.entry_price + lock_75_dist if is_bullish else state.entry_price - lock_75_dist
+            if (is_bullish and sl_75_lock > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or sl_75_lock < proposed_sl)):
+                proposed_sl = sl_75_lock
+                reason = (
+                    f"PROFIT_LOCK_75PCT_TP: Order reached {best_progress*100:.1f}% of intended profit "
+                    f"({floating_r:.2f}R). SL ratcheted to 50% of TP ({round(proposed_sl, 2)})."
+                )
 
         # ── 2. Structural Profit Lock at trailing_start_r and 2.0R ──────────────
         if floating_r >= 2.0:
@@ -222,14 +250,14 @@ class ProfitGuardian:
             state.peak_profit_usd = current_profit_usd
 
         # Only harvest if trade is currently in net profit
-        if current_profit_usd <= 0.15:
+        if current_profit_usd <= 0.10:
             return False, ""
 
-        # If peak profit reached >= $0.60 (or >= 0.85R) and gave back >= 35% of peak profit
-        if state.peak_profit_usd >= 0.60 or state.peak_r >= 0.85:
+        # If peak profit reached >= $0.45 (or >= 0.45R) and gave back >= 30% of peak profit
+        if state.peak_profit_usd >= 0.45 or state.peak_r >= 0.45:
             giveback = state.peak_profit_usd - current_profit_usd
             giveback_pct = (giveback / state.peak_profit_usd) if state.peak_profit_usd > 0 else 0.0
-            if giveback_pct >= 0.35:
+            if giveback_pct >= 0.30:
                 return True, (
                     f"PROFIT HARVEST: Banking +${current_profit_usd:.2f} after {giveback_pct*100:.0f}% "
                     f"pullback from peak +${state.peak_profit_usd:.2f} ({state.peak_r:.2f}R)"

@@ -546,7 +546,7 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
                 entry_price + sl_distance * 3.0 if is_bullish_setup else entry_price - sl_distance * 3.0, 2
             )
         else:
-            rr_target = 2.5
+            rr_target = 2.2
             tp1_structural = round(
                 entry_price + (sl_distance * 2.0) if is_bullish_setup else entry_price - (sl_distance * 2.0),
                 2,
@@ -560,7 +560,19 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
                 2,
             )
 
-    # Calculate the exact 50% Intended Profit price level where Breakeven is automatically triggered (R89/R90)
+    # Day-Trader <24h Intraday Target Horizon Cap:
+    # Ensure primary Take Profit is reachable within a single day-trading session (at most 2.4x H1 ATR or 2.5x SL distance,
+    # while strictly preserving at least 2.0R institutional reward-to-risk).
+    max_intraday_tp_dist = max(sl_distance * 2.0, min(sl_distance * 2.5, atr_val * 2.4))
+    if abs(target_tp - entry_price) > max_intraday_tp_dist:
+        target_tp = round(
+            entry_price + max_intraday_tp_dist if is_bullish_setup else entry_price - max_intraday_tp_dist,
+            2,
+        )
+        tp1_structural = target_tp
+        rr_target = round(abs(target_tp - entry_price) / sl_distance, 2) if sl_distance > 0 else 2.2
+
+    # Calculate the exact 50% Intended Profit price level where Breakeven + Profit Lock is triggered (R89/R90)
     breakeven_50pct_price = round(
         entry_price + abs(target_tp - entry_price) * 0.50
         if is_bullish_setup
@@ -568,7 +580,7 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         2,
     )
 
-    # 7. R99-R100: Market Clarity Engine (MCS-1 to MCS-7)
+    # 7. R99-R100: Market Clarity Engine (MCS-1 to MCS-7) + Strict Day-Trader Entry Timing Filter
     clarity_engine = MarketClarityEngine(
         clarity_reject_below=60,
         clarity_one_position=60,
@@ -578,6 +590,15 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         tp1_min_rr=2.0,
         h4_trend_filter_enabled=True,
         atr_period=14,
+    )
+
+    last_m15 = m15_candles[-1] if m15_candles else None
+    m15_candle_aligned = bool(
+        last_m15 is not None
+        and ((is_bullish_setup and last_m15.is_bullish) or ((not is_bullish_setup) and last_m15.is_bearish))
+    )
+    mtf_aligned = (is_bullish_setup and h1_ema_bull and m15_ema_bull) or (
+        (not is_bullish_setup) and (not h1_ema_bull) and (not m15_ema_bull)
     )
 
     if selected_fvg is not None and len(h1_candles) >= 15:
@@ -595,20 +616,19 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
             max_spread_pips=max_allowed_spread,
         )
         clarity_score = clarity_res.score
-        # Award multi-timeframe H1+M15 momentum alignment bonus if H4 is neutral or transitioning
-        mtf_aligned = (is_bullish_setup and h1_ema_bull and m15_ema_bull) or (
-            (not is_bullish_setup) and (not h1_ema_bull) and (not m15_ema_bull)
-        )
-        if mtf_aligned and market_confirmed and clarity_score < 75:
-            clarity_score = min(85, clarity_score + 15)
-        # Counter-trend penalty on Gold/BTC: never allow autonomous entry if M15 closed candle is strongly opposing
-        last_m15 = m15_candles[-1] if m15_candles else None
-        if last_m15 is not None:
-            opposing_m15 = (is_bullish_setup and last_m15.is_bearish and not m15_ema_bull) or (
-                (not is_bullish_setup) and last_m15.is_bullish and m15_ema_bull
-            )
-            if opposing_m15:
+        # Award intraday H1+M15 alignment points when H4 is NEUTRAL or when structure break + M15 candle align
+        if mtf_aligned and h4_trend == "NEUTRAL":
+            clarity_score += 10
+        if mtf_aligned and (market_confirmed or trigger_fired) and m15_candle_aligned:
+            clarity_score = max(clarity_score, 72) + 5
+        # Strict Zero-Loss Entry Timing Gate: never enter when the latest closed M15 candle is opposing the trade direction!
+        if last_m15 is not None and not m15_candle_aligned:
+            trigger_fired = False
+            market_confirmed = False
+            if (is_bullish_setup and not m15_ema_bull) or ((not is_bullish_setup) and m15_ema_bull):
                 clarity_score = max(40, clarity_score - 25)
+            else:
+                clarity_score = min(clarity_score, 62)
     else:
         clarity_score = 50
 
@@ -733,12 +753,13 @@ def calculate_dynamic_lot_size(
     entry_price: float,
     sl_price: float,
     clarity_grade: str = "B",
+    other_pair_unprotected: bool = False,
 ) -> tuple[float, float, float]:
     """
     Calculates exact lot size dynamically from the user's live MT5 account balance/equity,
     broker symbol specifications (tick_size, tick_value, volume_step), and Stop Loss distance (R55-R58, R100).
-      - Grade A setup (MCS >= 85): risks 1.5% of account equity
-      - Grade B setup (MCS 65-84): risks 1.0% of account equity
+      - Grade A setup (MCS >= 85): risks 1.25% of account equity (0.75% if other pair has unprotected risk)
+      - Grade B setup (MCS 65-84): risks 1.00% of account equity (0.75% if other pair has unprotected risk)
     Also verifies free margin via mt5.order_calc_margin() so the account is always protected.
     Returns: (volume_lots, actual_risk_usd, risk_pct_used)
     """
@@ -751,7 +772,10 @@ def calculate_dynamic_lot_size(
 
     # Use conservative base (min of balance and equity when in drawdown, or equity when growing)
     effective_capital = max(float(min(acct.balance, acct.equity)), float(acct.balance) * 0.95, 10.0)
-    risk_pct = 1.5 if str(clarity_grade).upper() == "A" else 1.0
+    if other_pair_unprotected:
+        risk_pct = 0.75
+    else:
+        risk_pct = 1.25 if str(clarity_grade).upper() == "A" else 1.00
     target_risk_usd = effective_capital * (risk_pct / 100.0)
 
     sl_dist = abs(float(entry_price) - float(sl_price))
@@ -1094,7 +1118,7 @@ def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=No
 def load_linked_sub_accounts(supabase, cred_mgr: CredentialManager, copier_engine: MultiAccountCopier):
     """
     Discovers all sub-accounts from Windows Credential Manager and Supabase settings
-    and registers them into the MultiAccountCopier engine.
+    (with retry and known sub-account fallback) and registers them into the MultiAccountCopier engine.
     """
     try:
         children_from_cm = cred_mgr.get_child_accounts()
@@ -1109,29 +1133,47 @@ def load_linked_sub_accounts(supabase, cred_mgr: CredentialManager, copier_engin
     except Exception as e:
         print(f"[WARN] Failed reading child accounts from Credential Manager: {e}")
 
-    try:
-        res = supabase.table("settings").select("key,value").execute()
-        for row in res.data or []:
-            k = row.get("key", "")
-            if k.startswith("mt5_account_") and k != "mt5_account_master":
-                v = row.get("value") or {}
-                acct_id = v.get("account_id") or v.get("login")
-                if acct_id:
-                    acct_num = int(acct_id)
-                    if acct_num not in copier_engine.child_accounts:
-                        creds = cred_mgr.get_credentials(acct_num)
-                        pw = creds.password if creds else ""
-                        srv = (v.get("server") or "Exness-MT5Trial10").strip().replace(" ", "-")
-                        copier_engine.add_child_account(ChildAccountConfig(
-                            account_id=acct_num,
-                            password=pw,
-                            server=srv,
-                            label=v.get("label", f"Sub-Account #{acct_num}"),
-                            risk_multiplier=float(v.get("risk_multiplier", 1.0)),
-                            is_active=bool(v.get("is_active", True)),
-                        ))
-    except Exception:
-        pass
+    for _attempt in range(3):
+        try:
+            res = supabase.table("settings").select("key,value").execute()
+            for row in res.data or []:
+                k = row.get("key", "")
+                if k.startswith("mt5_account_") and k != "mt5_account_master":
+                    v = row.get("value") or {}
+                    acct_id = v.get("account_id") or v.get("login")
+                    if acct_id:
+                        acct_num = int(acct_id)
+                        if acct_num not in copier_engine.child_accounts:
+                            creds = cred_mgr.get_credentials(acct_num)
+                            pw = creds.password if creds else ""
+                            srv = (v.get("server") or "Exness-MT5Trial10").strip().replace(" ", "-")
+                            copier_engine.add_child_account(ChildAccountConfig(
+                                account_id=acct_num,
+                                password=pw,
+                                server=srv,
+                                label=v.get("label", f"Sub-Account #{acct_num}"),
+                                risk_multiplier=float(v.get("risk_multiplier", 1.0)),
+                                is_active=bool(v.get("is_active", True)),
+                            ))
+            break
+        except Exception:
+            time.sleep(0.5)
+
+    # Fallback check for linked sub-account #486039130 in Windows Credential Manager
+    if 486039130 not in copier_engine.child_accounts:
+        try:
+            creds = cred_mgr.get_credentials(486039130)
+            if creds and creds.password:
+                copier_engine.add_child_account(ChildAccountConfig(
+                    account_id=486039130,
+                    password=creds.password,
+                    server=(creds.server or "Exness-MT5Trial10").strip().replace(" ", "-"),
+                    label="Sub-Account #486039130",
+                    risk_multiplier=1.0,
+                    is_active=True,
+                ))
+        except Exception:
+            pass
 
     print(f"[COPIER] Loaded {len(copier_engine.get_child_accounts())} linked sub-account(s) into fast trade copier.")
 
@@ -1397,6 +1439,34 @@ def main():
                                 known_db_tickets.add(t_str)
                             except Exception:
                                 pass
+
+                    # 0. Day-Trader <24h Intraday Lifecycle Guard:
+                    # Ensure all orders complete within 24 hours and bank profits during the same trading day!
+                    open_dt_obj = datetime.fromtimestamp(p.time, tz=timezone.utc)
+                    pos_age_hours = (datetime.now(timezone.utc) - open_dt_obj).total_seconds() / 3600.0
+                    if pos_age_hours >= 10.0 and net_profit_usd > 0.05:
+                        print(
+                            f"\n[DAY-TRADER SESSION HARVEST] Position #{p.ticket} ({p.symbol}) has run for "
+                            f"{pos_age_hours:.1f}h (<24h day-trade rule) and is in profit (+${net_profit_usd:.2f}). "
+                            f"Banking profit now and re-arming scanner!"
+                        )
+                        close_position_mt5(
+                            mt5, supabase, copier_engine, profit_guardian,
+                            ticket=p.ticket, close_reason="DAY_TRADE_PROFIT_EXIT"
+                        )
+                        last_auto_trade_by_symbol[base_sym_name] = 0.0
+                        continue
+                    elif pos_age_hours >= 23.5:
+                        print(
+                            f"\n[DAY-TRADER 24H LIMIT] Position #{p.ticket} ({p.symbol}) reached {pos_age_hours:.1f}h "
+                            f"(approaching 24h day-trade limit). Closing cleanly at ${net_profit_usd:+.2f}!"
+                        )
+                        close_position_mt5(
+                            mt5, supabase, copier_engine, profit_guardian,
+                            ticket=p.ticket, close_reason="MAX_24H_DAY_TRADE"
+                        )
+                        last_auto_trade_by_symbol[base_sym_name] = 0.0
+                        continue
 
                     # 1. Sudden Market Structure Reversal (CHoCH) Check:
                     # If the market suddenly changes structure against an open profitable order,
@@ -1675,6 +1745,16 @@ def main():
                         mcs = auto_setup.get("clarity_score", 0)
                         is_confirmed = bool(auto_setup.get("trigger_fired") or auto_setup.get("market_confirmed"))
                         if mcs >= 65 and is_confirmed:
+                            other_sym = "BTCUSD" if auto_base == "XAUUSD" else "XAUUSD"
+                            other_open_list = open_by_base.get(other_sym, [])
+                            other_unprotected = False
+                            for op in other_open_list:
+                                op_t = int(op["ticket"])
+                                st = profit_guardian._positions.get(op_t)
+                                if not (st and st.breakeven_activated):
+                                    other_unprotected = True
+                                    break
+
                             auto_dir = auto_setup["direction"]
                             auto_sl = float(auto_setup["stop_loss"])
                             auto_tp = float(auto_setup["take_profit"])
@@ -1685,6 +1765,7 @@ def main():
                                 float(auto_setup["entry_price"]),
                                 auto_sl,
                                 auto_setup.get("clarity_grade", "B"),
+                                other_pair_unprotected=other_unprotected,
                             )
 
                             print(
@@ -1703,6 +1784,9 @@ def main():
                             )
                             print(f"[AUTO-SMC] {auto_base} Result: {res_msg}\n")
                             last_auto_trade_by_symbol[auto_base] = time.time()
+                            # Update open_by_base in-memory so second pair knows first pair just opened
+                            if ok:
+                                open_by_base.setdefault(auto_base, []).append({"ticket": "0"})
 
                 # Prune old heartbeats every 10 min
                 if time.time() - last_cleanup > 600:
