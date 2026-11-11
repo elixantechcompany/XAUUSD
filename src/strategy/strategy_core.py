@@ -27,7 +27,7 @@ from src.utils.logging_config import get_logger
 log = get_logger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-SPEC_VERSION = "1.0"
+SPEC_VERSION = "1.2"
 SPEC_HASH_PLACEHOLDER = "NOT_YET_ESTABLISHED"
 
 
@@ -1078,3 +1078,301 @@ class SetupExpiryChecker:
                 )
 
         return False, ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Break-Even and ATR Trailing Stop Manager (R89–R96, spec v1.1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from dataclasses import dataclass as _dataclass_be  # noqa: F401 (duplicate — use top-level dataclass)
+
+
+@dataclass
+class StopUpdateResult:
+    """
+    Output of a break-even / trailing stop evaluation.
+
+    new_sl is None when no update is needed.
+    reason explains exactly why the decision was made (for decision log).
+    """
+    should_update: bool
+    new_sl: float | None
+    reason: str
+    is_breakeven: bool = False    # True only when this is the initial BE move
+    is_trailing: bool = False     # True when this is a trailing move
+
+
+class BreakEvenTrailingManager:
+    """
+    Manages break-even and ATR trailing stop for an open position.
+
+    Rules enforced:
+      R89  — break-even triggers at breakeven_trigger_pct of distance to TP
+      R90  — break-even moves SL to exact entry price
+      R91  — broker verification required (handled by caller)
+      R92  — trailing activates after break-even confirmed
+      R93  — trail = best_close - trailing_atr_factor × ATR(14)
+      R94  — evaluated on candle close only
+      R95  — broker verification required (handled by caller)
+      R96  — SL never moves against the position; TP unchanged
+    """
+
+    def __init__(
+        self,
+        breakeven_trigger_pct: float = 0.50,
+        trailing_atr_factor: float = 1.0,
+        atr_period: int = 14,
+        tick_size: float = 0.01,
+        trade_stops_level: int = 0,
+        point: float = 0.01,
+    ) -> None:
+        if not (0.01 <= breakeven_trigger_pct <= 0.99):
+            raise ValueError(
+                f"breakeven_trigger_pct must be between 0.01 and 0.99, "
+                f"got {breakeven_trigger_pct}"
+            )
+        if trailing_atr_factor <= 0:
+            raise ValueError(
+                f"trailing_atr_factor must be > 0, got {trailing_atr_factor}"
+            )
+        self.breakeven_trigger_pct = breakeven_trigger_pct
+        self.trailing_atr_factor   = trailing_atr_factor
+        self.atr_period            = atr_period
+        self.tick_size             = tick_size
+        self.trade_stops_level     = trade_stops_level
+        self.point                 = point
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def evaluate(
+        self,
+        direction: str,
+        entry_price: float,
+        original_sl: float,
+        tp_price: float,
+        current_sl: float,
+        breakeven_fired: bool,
+        best_close_since_entry: float | None,
+        candles: list,          # list[Candle] — completed H1 candles
+        close_price: float,     # latest completed H1 candle close (R94)
+    ) -> StopUpdateResult:
+        """
+        Evaluate whether the stop should be updated on this candle close.
+
+        Call once per completed H1 candle while the position is open.
+        The caller is responsible for broker submission and verification (R91, R95).
+
+        Args:
+            direction:              "BULLISH" or "BEARISH"
+            entry_price:            actual fill price
+            original_sl:            SL at the time of entry (never changes)
+            tp_price:               take-profit price (never changes)
+            current_sl:             current active SL (may have been updated)
+            breakeven_fired:        True if break-even has already been confirmed
+            best_close_since_entry: best candle close seen since entry
+                                    (highest for bull, lowest for bear); None if first candle
+            candles:                completed H1 candles for ATR calculation
+            close_price:            close of the most recently completed H1 candle
+
+        Returns:
+            StopUpdateResult — new_sl is None when no update needed
+        """
+        # ── Update best close (R93) ─────────────────────────────────────────
+        if best_close_since_entry is None:
+            best_close_since_entry = close_price
+        else:
+            if direction == "BULLISH":
+                best_close_since_entry = max(best_close_since_entry, close_price)
+            else:
+                best_close_since_entry = min(best_close_since_entry, close_price)
+
+        # ── Phase 1: check break-even trigger (R89) ─────────────────────────
+        if not breakeven_fired:
+            return self._check_breakeven(
+                direction, entry_price, tp_price,
+                current_sl, close_price, best_close_since_entry,
+            )
+
+        # ── Phase 2: trailing stop (R92, R93) ───────────────────────────────
+        return self._check_trailing(
+            direction, entry_price, current_sl,
+            best_close_since_entry, candles,
+        )
+
+    # ── Internal ───────────────────────────────────────────────────────────────
+
+    def _check_breakeven(
+        self,
+        direction: str,
+        entry_price: float,
+        tp_price: float,
+        current_sl: float,
+        close_price: float,
+        best_close: float,
+    ) -> StopUpdateResult:
+        """R89: check whether price has reached the break-even trigger level."""
+        if direction == "BULLISH":
+            tp_distance = tp_price - entry_price
+            if tp_distance <= 0:
+                return StopUpdateResult(
+                    False, None, "TP distance is zero or negative — skipping BE check"
+                )
+            progress = (best_close - entry_price) / tp_distance
+            already_at_be = current_sl >= entry_price
+        else:
+            tp_distance = entry_price - tp_price
+            if tp_distance <= 0:
+                return StopUpdateResult(
+                    False, None, "TP distance is zero or negative — skipping BE check"
+                )
+            progress = (entry_price - best_close) / tp_distance
+            already_at_be = current_sl <= entry_price
+
+        # R89: skip if SL already at or better than break-even
+        if already_at_be:
+            return StopUpdateResult(
+                False, None,
+                f"SL already at/beyond entry ({current_sl:.5f}) — "
+                "break-even not needed (R89)"
+            )
+
+        if progress < self.breakeven_trigger_pct:
+            return StopUpdateResult(
+                False, None,
+                f"Progress {progress:.3f} < trigger {self.breakeven_trigger_pct:.2f} "
+                f"(R89) — no break-even yet"
+            )
+
+        # R90: move SL to exact entry price, rounded conservatively
+        new_sl = self._round_to_tick(entry_price, direction, mode="breakeven")
+
+        # R90: check broker minimum stop distance
+        if not self._passes_min_stop(new_sl, best_close, direction):
+            return StopUpdateResult(
+                False, None,
+                f"Break-even triggered (progress={progress:.3f}) but "
+                f"broker min stop distance not yet satisfied — deferring (R90)"
+            )
+
+        return StopUpdateResult(
+            should_update=True,
+            new_sl=new_sl,
+            reason=(
+                f"Break-even triggered: progress={progress:.3f} >= "
+                f"{self.breakeven_trigger_pct:.2f}. "
+                f"SL {current_sl:.5f} -> entry {new_sl:.5f} (R89/R90)"
+            ),
+            is_breakeven=True,
+            is_trailing=False,
+        )
+
+    def _check_trailing(
+        self,
+        direction: str,
+        entry_price: float,
+        current_sl: float,
+        best_close: float,
+        candles: list,
+    ) -> StopUpdateResult:
+        """R93: compute ATR trailing stop and check if it improves the current SL."""
+        atr_val = compute_atr(candles, self.atr_period)
+        if atr_val is None:
+            return StopUpdateResult(
+                False, None,
+                "ATR unavailable — trailing stop skipped this candle (R93)"
+            )
+
+        trail_distance = self.trailing_atr_factor * atr_val
+
+        if direction == "BULLISH":
+            candidate_sl = best_close - trail_distance
+            # R96: never move SL backward (must be >= current_sl)
+            if candidate_sl <= current_sl:
+                return StopUpdateResult(
+                    False, None,
+                    f"Trailing SL candidate {candidate_sl:.5f} <= "
+                    f"current SL {current_sl:.5f} — no move needed (R96)"
+                )
+        else:
+            candidate_sl = best_close + trail_distance
+            # R96: never move SL backward (must be <= current_sl)
+            if candidate_sl >= current_sl:
+                return StopUpdateResult(
+                    False, None,
+                    f"Trailing SL candidate {candidate_sl:.5f} >= "
+                    f"current SL {current_sl:.5f} — no move needed (R96)"
+                )
+
+        # Round to valid tick increment
+        new_sl = self._round_to_tick(candidate_sl, direction, mode="trailing")
+
+        # Sanity: never move against position after break-even (R96)
+        if direction == "BULLISH" and new_sl < entry_price:
+            return StopUpdateResult(
+                False, None,
+                f"Trailing SL {new_sl:.5f} would be below entry {entry_price:.5f} "
+                "— not allowed after break-even (R96)"
+            )
+        if direction == "BEARISH" and new_sl > entry_price:
+            return StopUpdateResult(
+                False, None,
+                f"Trailing SL {new_sl:.5f} would be above entry {entry_price:.5f} "
+                "— not allowed after break-even (R96)"
+            )
+
+        return StopUpdateResult(
+            should_update=True,
+            new_sl=new_sl,
+            reason=(
+                f"Trailing stop: best_close={best_close:.5f} "
+                f"ATR={atr_val:.5f} factor={self.trailing_atr_factor} "
+                f"trail_dist={trail_distance:.5f} "
+                f"SL {current_sl:.5f} -> {new_sl:.5f} (R93/R94)"
+            ),
+            is_breakeven=False,
+            is_trailing=True,
+        )
+
+    def _round_to_tick(
+        self, price: float, direction: str, mode: str
+    ) -> float:
+        """Round price to nearest valid tick, conservatively (toward entry)."""
+        import math as _math
+        if self.tick_size <= 0:
+            return round(price, 8)
+        if mode == "breakeven":
+            # For break-even the caller already passes the exact entry price;
+            # just snap to the nearest tick
+            steps = round(price / self.tick_size)
+        elif direction == "BULLISH":
+            # Trailing bull: floor (stop stays further from current price = safer)
+            steps = _math.floor(price / self.tick_size)
+        else:
+            # Trailing bear: ceil
+            steps = _math.ceil(price / self.tick_size)
+        return round(steps * self.tick_size, 8)
+
+    def _passes_min_stop(
+        self, sl: float, current_price: float, direction: str
+    ) -> bool:
+        """R90: check broker minimum stop distance constraint."""
+        min_dist = self.trade_stops_level * self.point
+        if min_dist <= 0:
+            return True
+        dist = abs(current_price - sl)
+        return dist >= min_dist
+
+    # ── Utility: update best_close given a new candle ─────────────────────────
+
+    @staticmethod
+    def update_best_close(
+        direction: str,
+        previous_best: float | None,
+        new_close: float,
+    ) -> float:
+        """Return the updated best-close value after a new H1 candle closes."""
+        if previous_best is None:
+            return new_close
+        if direction == "BULLISH":
+            return max(previous_best, new_close)
+        return min(previous_best, new_close)

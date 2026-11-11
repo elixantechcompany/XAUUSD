@@ -18,7 +18,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Server, Shield, Eye, EyeOff,
+  Plus, Server, Shield, Eye, EyeOff, Key,
   CheckCircle2, AlertCircle,
   Loader2, Zap, Power, Trash2, RefreshCw, Copy, Layers, AlertTriangle,
   Check, Settings, Terminal, ArrowRightLeft
@@ -117,6 +117,12 @@ export default function AccountsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  // Sub-account password registration modal
+  const [passwordDialogChild, setPasswordDialogChild] = useState<AccountInfo | null>(null);
+  const [subAccountPassword, setSubAccountPassword] = useState("");
+  const [savingChildPw, setSavingChildPw] = useState(false);
+  const [showChildPw, setShowChildPw] = useState(false);
 
   const finalServer = server === "custom" ? customServer.trim() : server;
   const finalMasterServer = masterServer === "custom" ? masterCustomServer.trim() : masterServer;
@@ -227,7 +233,7 @@ export default function AccountsPage() {
         .select("key, value")
         .like("key", "mt5_account_%");
 
-      const loaded = (data ?? []).map((row) => ({ ...row.value, key: row.key }) as any).filter(Boolean);
+      const loaded = ((data ?? []) as Array<{ key: string; value: Record<string, any> }>).map((row) => ({ ...row.value, key: row.key }) as any).filter(Boolean);
       const masterRow = loaded.find((a) => a.is_master || a.mode === "master" || a.key === "mt5_account_master") || loaded[0];
       const childRows = loaded.filter((a) => a !== masterRow);
 
@@ -455,6 +461,36 @@ export default function AccountsPage() {
       setError("Failed to toggle sub-account replication.");
     } finally {
       setTogglingId(null);
+    }
+  }
+
+  // ── Save Child Account Password & Authorize ──────────────────────────────
+  async function handleSaveChildPassword(e: FormEvent) {
+    e.preventDefault();
+    if (!passwordDialogChild || !subAccountPassword) return;
+    setSavingChildPw(true);
+    try {
+      const res = await fetch("/api/account/sub-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: passwordDialogChild.account_id,
+          password: subAccountPassword,
+          server: passwordDialogChild.server,
+          label: passwordDialogChild.label,
+          risk_multiplier: passwordDialogChild.risk_multiplier || 1.0,
+          is_active: passwordDialogChild.is_active,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save credentials");
+      setSuccess(`Trading password for sub-account #${passwordDialogChild.account_id} registered into Trade Copier!`);
+      setPasswordDialogChild(null);
+      setSubAccountPassword("");
+      await fetchCopierAccounts(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Error saving sub-account credentials");
+    } finally {
+      setSavingChildPw(false);
     }
   }
 
@@ -1228,6 +1264,19 @@ export default function AccountsPage() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* Set / Update Password button */}
+                      <button
+                        onClick={() => {
+                          setPasswordDialogChild(child);
+                          setSubAccountPassword("");
+                        }}
+                        className="px-2.5 py-1.5 rounded-inner text-xs font-semibold border border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent transition-all flex items-center gap-1 min-h-[36px]"
+                        title="Authorize / Update MT5 trading password for this sub-account"
+                      >
+                        <Key className="w-3.5 h-3.5" />
+                        <span>Authorize</span>
+                      </button>
+
                       {/* Toggle Copying button */}
                       <button
                         onClick={() => handleToggle(child.account_id)}
@@ -1268,6 +1317,81 @@ export default function AccountsPage() {
           </div>
         )}
       </section>
+
+      {/* ── Sub-Account Password Authorization Modal ── */}
+      {passwordDialogChild && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-surface border-2 border-accent/40 rounded-card p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-accent/15 border border-accent/30 flex items-center justify-center">
+                  <Key className="w-4 h-4 text-accent" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-text-primary">Authorize Sub-Account Trading</h3>
+                  <p className="text-[11px] text-text-secondary">
+                    {passwordDialogChild.label} (#{passwordDialogChild.account_id})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasswordDialogChild(null)}
+                className="text-text-secondary hover:text-text-primary text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-text-secondary">
+              Enter the Exness MT5 trading password for <strong>#{passwordDialogChild.account_id}</strong> on server <strong>{passwordDialogChild.server}</strong> to allow the Trade Copier to replicate trades with proportional lot sizing.
+            </p>
+
+            <form onSubmit={handleSaveChildPassword} className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-text-primary block mb-1">
+                  Trading Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showChildPw ? "text" : "password"}
+                    value={subAccountPassword}
+                    onChange={(e) => setSubAccountPassword(e.target.value)}
+                    required
+                    placeholder="Enter MT5 password"
+                    className={cn(inputCls, "pr-10")}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowChildPw(!showChildPw)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary hover:text-text-primary"
+                  >
+                    {showChildPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPasswordDialogChild(null)}
+                  className="px-3 py-2 rounded-inner border border-border text-xs text-text-secondary hover:text-text-primary"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingChildPw || !subAccountPassword}
+                  className="px-4 py-2 bg-accent hover:bg-blue-600 disabled:opacity-50 text-white font-semibold rounded-inner text-xs flex items-center gap-1.5"
+                >
+                  {savingChildPw ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  <span>Authorize &amp; Link</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ── 3. Recent Copied Trades Audit Table ── */}
       {copiedTrades.length > 0 && (

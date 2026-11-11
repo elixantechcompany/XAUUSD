@@ -29,7 +29,7 @@ export default function OverviewPage() {
   const currentBalance = heartbeat?.balance ?? account?.balance ?? null;
   const dailyPnl = account?.daily_pnl ?? 0;
   const drawdownPct = account?.drawdown_pct ?? 0;
-  const openPositions = account?.open_positions ?? 0;
+  const openPositions = account?.open_positions_count ?? account?.open_positions ?? 0;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16">

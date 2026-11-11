@@ -5,7 +5,14 @@
  * Run `supabase gen types typescript` after connecting to auto-generate.
  */
 
-export type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[]
+  | Record<string, unknown>;
 
 export type SetupState =
   | "FVG_DETECTED"
@@ -59,6 +66,7 @@ export interface AccountSnapshot {
   daily_pnl: number | null;
   drawdown_pct: number | null;
   open_positions_count: number;
+  open_positions?: number;   // alias used in overview page
   execution_mode: ExecutionMode;
 }
 
@@ -87,6 +95,12 @@ export interface Signal {
   rejection_reason: string | null;
   session: Session | null;
   quality_grade: QualityGrade | null;
+  clarity_score?: number | null;
+  clarity_grade?: string | null;
+  positions_permitted?: number | null;
+  tp1_structural?: number | null;
+  tp2_structural?: number | null;
+  h4_trend?: string | null;
   strategy_version: string;
   outcome: "win" | "loss" | "breakeven" | null;
   closed_at: string | null;
@@ -120,12 +134,12 @@ export interface Command {
   id: string;
   type: CommandType;
   payload: Json;
-  created_by: string | null;
+  created_by?: string | null;
   created_at: string;
-  expires_at: string;
+  expires_at?: string | null;   // nullable — optimistic local commands don't have this
   status: CommandStatus;
   result: string | null;
-  acked_at: string | null;
+  acked_at?: string | null;
 }
 
 export interface LogEntry {
@@ -135,6 +149,12 @@ export interface LogEntry {
   code: string;
   message: string;
   context_json: Json;
+}
+
+export interface SettingRow {
+  key: string;
+  value: Record<string, unknown>;
+  updated_at?: string;
 }
 
 export interface AnalyticsByHour {
@@ -152,17 +172,18 @@ export interface AnalyticsByHour {
 export interface Database {
   public: {
     Tables: {
-      heartbeats: { Row: Heartbeat; Insert: Omit<Heartbeat, "id">; Update: Partial<Heartbeat> };
-      accounts_snapshot: { Row: AccountSnapshot; Insert: Omit<AccountSnapshot, "id">; Update: Partial<AccountSnapshot> };
-      signals: { Row: Signal; Insert: Signal; Update: Partial<Signal> };
-      trades: { Row: Trade; Insert: Trade; Update: Partial<Trade> };
-      commands: { Row: Command; Insert: Omit<Command, "id" | "created_at">; Update: Partial<Command> };
-      logs: { Row: LogEntry; Insert: Omit<LogEntry, "id">; Update: never };
+      heartbeats: { Row: Heartbeat; Insert: Omit<Heartbeat, "id">; Update: Partial<Heartbeat>; Relationships: [] };
+      accounts_snapshot: { Row: AccountSnapshot; Insert: Omit<AccountSnapshot, "id">; Update: Partial<AccountSnapshot>; Relationships: [] };
+      signals: { Row: Signal; Insert: Signal; Update: Partial<Signal>; Relationships: [] };
+      trades: { Row: Trade; Insert: Trade; Update: Partial<Trade>; Relationships: [] };
+      commands: { Row: Command; Insert: Partial<Command> & { type: CommandType; status: CommandStatus }; Update: Partial<Command>; Relationships: [] };
+      logs: { Row: LogEntry; Insert: Omit<LogEntry, "id">; Update: never; Relationships: [] };
+      settings: { Row: SettingRow; Insert: SettingRow; Update: Partial<SettingRow>; Relationships: [] };
     };
     Views: {
-      analytics_by_hour: { Row: AnalyticsByHour };
+      analytics_by_hour: { Row: AnalyticsByHour; Relationships: [] };
     };
-    Functions: {};
-    Enums: {};
+    Functions: Record<string, never>;
+    Enums: Record<string, never>;
   };
 }

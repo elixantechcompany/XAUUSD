@@ -82,6 +82,43 @@ class StrategySettings(BaseSettings):
     # ── ATR period ────────────────────────────────────────────────────────────
     atr_period: int = 14                   # used for R8, R33, R36
 
+    # ── Multi-timeframe (R97, R98, v1.2) ─────────────────────────────────────
+    # H4 trend filter — requires H4 higher-highs/higher-lows for bullish setups
+    h4_trend_filter_enabled: bool = True           # R97 ✅
+    # Entry timeframe — M15 default (finer entry), H1 = original behaviour
+    entry_timeframe: str = "M15"                   # R98 ✅
+
+    # ── Market Clarity Engine (R99, v1.2) ─────────────────────────────────────
+    clarity_reject_below: int = 60                 # R99 🔶
+    clarity_one_position: int = 60                 # R99 🔶
+    clarity_two_positions: int = 75                # R99 🔶
+    clarity_high_confluence: int = 85              # R99 🔶
+
+    # ── Setup grade thresholds (R100, v1.2) ──────────────────────────────────
+    grade_a_min_score: int = 85                    # R100 🔶
+    grade_b_min_score: int = 60                    # R100 🔶
+    grade_a_risk_pct: float = 1.5                  # R100 🔶 — not proven optimal
+    grade_b_risk_pct: float = 1.0                  # R100 🔶 — not proven optimal
+    grade_a_risk_pct_max: float = 1.5              # R100 🔶 — hard ceiling
+
+    # ── Structural TP (R102, R103, v1.2) ──────────────────────────────────────
+    tp1_min_rr: float = 2.0                        # R102 ✅
+    tp2_min_rr: float = 3.0                        # R103 ✅
+    tp2_min_atr_distance: float = 3.0              # R104/TF-7 ✅
+
+    # ── Two-position execution (R104, v1.2) ───────────────────────────────────
+    two_position_mode_enabled: bool = True         # R104 ✅
+
+    # ── Partial execution recovery (R108, v1.2) ───────────────────────────────
+    partial_execution_policy: str = "leave_a_open" # R108 ✅
+
+    # ── Break-even after TP1 (R109, v1.2) ────────────────────────────────────
+    move_b_to_be_after_tp1: bool = True            # R109 ✅
+    be_offset_after_tp1_ticks: int = 2             # R109 🔶
+
+    # ── MCS displacement candle threshold (R99-MCS5) ─────────────────────────
+    displacement_body_pct: float = 0.60            # 60% body/range ratio
+
 
 class RiskSettings(BaseSettings):
     """
@@ -101,8 +138,9 @@ class RiskSettings(BaseSettings):
     # ── Daily trades (R50 ✅) ─────────────────────────────────────────────────
     max_daily_trades: int = 5              # APPROVED
 
-    # ── Concurrent positions per symbol (R52 🔶 PROPOSED_DEFAULT) ────────────
-    max_open_per_symbol: int = 1           # PROPOSED_DEFAULT
+    # ── Concurrent positions per symbol (R52 / R104 v1.2) ───────────────────
+    # Two-position execution requires max 2 per symbol
+    max_open_per_symbol: int = 2           # R104 ✅ — 2 positions per setup max
 
     # ── Daily loss limit (R54 🔶 PROPOSED_DEFAULT) ───────────────────────────
     daily_loss_pct: float = 3.0            # PROPOSED_DEFAULT — not claimed optimal
@@ -128,6 +166,17 @@ class RiskSettings(BaseSettings):
 
     # ── Stop retries (IMPL5 ✅) ───────────────────────────────────────────────
     max_sl_retry: int = 3
+
+    # ── Break-even trigger (R89 🔶 PROPOSED DEFAULT) ──────────────────────────
+    # Fire break-even when price reaches this fraction of the way to TP.
+    # 0.50 = 50% of the distance from entry to TP. Not claimed to be optimal.
+    breakeven_trigger_pct: float = 0.50
+
+    # ── Trailing stop ATR factor (R93 🔶 PROPOSED DEFAULT) ───────────────────
+    # After break-even, trail at price - (trailing_atr_factor × ATR(14)).
+    # 1.0 = one full ATR below the best close seen since entry.
+    # Not claimed to be optimal.
+    trailing_atr_factor: float = 1.0
 
     # ── Dashboard heartbeat thresholds (IMPL9 🔶 PROPOSED_DEFAULT) ───────────
     heartbeat_online_secs: int = 15

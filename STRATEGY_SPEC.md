@@ -1,9 +1,16 @@
 # STRATEGY SPECIFICATION
 **Project:** XAUUSD / BTCUSD FVG Liquidity-Sweep Trader
-**Version:** 1.0
-**Approval status:** ✅ OWNER-APPROVED — rules sourced from owner messages Part 1 and Part 2 (2026-10-17)
-**Spec hash:** NOT YET ESTABLISHED — will be computed and recorded after this file is committed to Git
+**Version:** 1.2
+**Approval status:** ✅ OWNER-APPROVED
+- v1.0 rules (2026-10-17)
+- v1.1 break-even + ATR trailing stop (R89–R96, 2026-10-17)
+- v1.2 Market Clarity Engine, multi-timeframe analysis, two-position execution, setup grading, M15 entry trigger (R97–R130, 2026-10-17)
+**Spec hash:** NOT YET ESTABLISHED
 **Last updated:** 2026-10-17
+
+### Changelog v1.1 → v1.2
+- R43 amended further: two-position execution is now approved under R110–R118
+- R97–R130: new rules covering H4 trend filter, M15 entry trigger, Market Clarity Engine, setup grading, structural TP detection, two-position execution, break-even management, and backtesting modes
 
 ---
 
@@ -765,18 +772,16 @@ The multiplier is the `min_reward_to_risk` setting (default `2.0`, not configura
 
 ---
 
-### R43 — Disabled exit features
-**Status:** ❌ PROHIBITED (until explicitly re-approved)
+### R43 — Disabled exit features (amended in v1.1)
+**Status:** ❌ PROHIBITED for unlisted features — break-even and ATR trailing stop are now ✅ APPROVED via R89–R96
 
-The following exit mechanisms are **disabled** and must not be implemented:
-- Trailing stop
+The following exit mechanisms remain **disabled** and must not be implemented:
 - Partial take-profit (scale-out)
-- Break-even move (stop to entry)
 - Opposite-signal position reversal
 - Discretionary or manual exit by the engine
 - Time-based exit
 
-None of these may be activated without a new approved spec version.
+Break-even and ATR trailing stop are governed by R89–R96 below.
 
 ---
 
@@ -1500,3 +1505,449 @@ All strategy open questions (OQ-1 through OQ-27) from the draft spec have been r
 ---
 
 *End of STRATEGY_SPEC.md v1.0*
+
+---
+
+## New Rules — v1.1: Break-Even and ATR Trailing Stop
+
+---
+
+### R89 — Break-even trigger condition
+**Status:** ✅ APPROVED
+
+**Rule:** The break-even move is triggered when the floating price has travelled at least **50% of the distance from the entry price to the take-profit price** in the favourable direction.
+
+```
+For a BULLISH position:
+  progress = (current_bid - entry_price) / (tp_price - entry_price)
+  trigger fires when progress >= 0.50
+
+For a BEARISH position:
+  progress = (entry_price - current_ask) / (entry_price - tp_price)
+  trigger fires when progress >= 0.50
+```
+
+- Evaluation uses the **candle close price** of a completed H1 bar (R3 — no live tick during strategy decisions).
+- The trigger fires **at most once per position** (R90 handles subsequent trailing).
+- Progress is clamped to [0.0, 1.0]. A value ≥ 1.0 means TP was reached, not break-even.
+
+**Configurable parameter:** `breakeven_trigger_pct` (default `0.50`) in `RiskSettings`.
+
+**This threshold is not claimed to be optimal.**
+
+**Required inputs:** entry price, TP price, candle close price, position direction
+**Expected outcome:** Break-even move initiated when threshold crossed on candle close
+**Rejection:** If SL is already at or above entry (bullish) or at or below entry (bearish), skip — already at break-even or better
+
+**Test requirement:** T-R89-1: Break-even fires at exactly 50% progress (bullish). T-R89-2: Break-even fires at exactly 50% progress (bearish). T-R89-3: Break-even does not fire below 50%. T-R89-4: Break-even skipped if SL already at entry.
+
+---
+
+### R90 — Break-even stop placement
+**Status:** ✅ APPROVED
+
+**Rule:** When R89 triggers, the stop-loss is moved to the **exact entry price**:
+
+```
+new_sl = entry_price   (for both BULLISH and BEARISH)
+```
+
+- The stop is rounded to the nearest valid `symbol_info.tick_size` increment toward the entry (conservative rounding — never beyond entry).
+- The new SL must satisfy the broker's minimum stop-distance (`trade_stops_level`). If it does not (because entry is too close to current price), the move is deferred until the distance is valid.
+- The original SL is recorded before the move for audit purposes.
+
+**Risk acknowledgement:** Moving the stop to entry does not guarantee a break-even exit. A gap or sudden spike can cause a fill beyond the stop level, resulting in a loss. The owner has acknowledged this (BEQ-6).
+
+**Test requirement:** T-R90-1: SL set to exact entry price on trigger. T-R90-2: SL rounded toward entry when needed. T-R90-3: Move deferred when broker minimum stop distance not satisfied.
+
+---
+
+### R91 — Break-even broker verification
+**Status:** ✅ APPROVED
+
+**Rule:** After submitting the stop-loss modification to the broker (MT5), the engine must verify the new stop is accepted before declaring the position protected at the new level.
+
+If MT5 rejects the SL modification:
+1. Log the rejection with retcode and details.
+2. Retry up to `max_sl_retry` times (default `3`, R39).
+3. If all retries fail, raise a `CRITICAL` alert: `"BREAK-EVEN STOP REJECTED — position still protected at original SL {original_sl}"`.
+4. The position remains protected at the original SL. Do not mark it as at break-even.
+
+In **paper mode**, the stop modification is applied to the paper ledger directly. Broker confirmation is simulated as always-successful.
+
+**Test requirement:** T-R91-1: Alert raised on rejection. T-R91-2: Original SL retained if modification fails. T-R91-3: Paper mode always succeeds.
+
+---
+
+### R92 — ATR trailing stop — activation
+**Status:** ✅ APPROVED
+
+**Rule:** After the break-even stop has been successfully placed (R90 + R91), the ATR trailing stop becomes **active** for that position. It replaces break-even as the active stop management mode.
+
+The trailing stop is only active when:
+1. The position is open (`POSITION_OPEN` state).
+2. The break-even trigger has already fired and was confirmed by the broker.
+3. Current price progress toward TP is > 50% (trailing never moves the stop backward).
+
+**Test requirement:** T-R92-1: Trailing not active before break-even fires. T-R92-2: Trailing activates immediately after break-even confirmation.
+
+---
+
+### R93 — ATR trailing stop — distance
+**Status:** 🔶 PROPOSED DEFAULT
+
+**Rule:** The trailing stop distance is `1.0 × ATR(14)` computed from the most recent **completed H1 candles** at the time of evaluation:
+
+```
+For BULLISH:
+  trail_sl = highest_close_since_entry - (1.0 × ATR(14))
+
+For BEARISH:
+  trail_sl = lowest_close_since_entry  + (1.0 × ATR(14))
+```
+
+- `highest_close_since_entry` / `lowest_close_since_entry` is the most favourable **candle close** seen since the position opened (not the intrabar wick).
+- The trail distance is recomputed on every H1 candle close using the current ATR.
+- The trailing stop **only moves in the favourable direction** — it never moves against the position.
+
+**Configurable parameter:** `trailing_atr_factor` (default `1.0`) in `RiskSettings`.
+
+**This distance is not claimed to be optimal.** It scales with volatility which is suitable for instruments like XAUUSD and BTCUSD.
+
+**Test requirement:** T-R93-1: Trail computed as highest_close - 1×ATR (bullish). T-R93-2: Trail computed as lowest_close + 1×ATR (bearish). T-R93-3: ATR recomputed from latest candles on each evaluation. T-R93-4: Trail never moves backward.
+
+---
+
+### R94 — ATR trailing stop — evaluation timing
+**Status:** ✅ APPROVED
+
+**Rule:** The trailing stop is evaluated **once per completed H1 candle close** only. Live ticks are never used to evaluate or move the trailing stop. This is consistent with R3 (completed candles only for strategy decisions) and avoids stop-hunting by tick noise.
+
+**Test requirement:** T-R94-1: Trail not evaluated on tick. T-R94-2: Trail evaluated exactly once per H1 close.
+
+---
+
+### R95 — ATR trailing stop — broker verification
+**Status:** ✅ APPROVED
+
+**Rule:** Every trailing stop modification follows the same broker verification process as the original SL (R39) and the break-even move (R91):
+
+1. Submit the SL modification to MT5.
+2. Verify MT5 confirms the new stop level.
+3. Update the persisted `current_sl` only after confirmation.
+4. If rejected, retain the previous stop level and log the failure. Do not treat the position as protected at the new level.
+
+In **paper mode**, the modification is applied directly to the paper ledger.
+
+**Test requirement:** T-R95-1: Trailing SL only updated after broker confirms. T-R95-2: Previous SL retained on rejection.
+
+---
+
+### R96 — Trail / break-even prohibition override
+**Status:** ✅ APPROVED
+
+**Rule:** The following remain permanently prohibited even with trailing stop active:
+
+- The trailing stop may **never** move the SL in the direction that increases risk (i.e. away from entry after break-even is set).
+- The trailing stop is **not** a partial take-profit, scale-out, or reversal.
+- The trailing stop does **not** trigger a new entry in the opposite direction.
+- The trailing stop activation does **not** change the original `proposed_tp` level — the position still closes at TP if hit first.
+
+**Test requirement:** T-R96-1: SL never moves against position after break-even. T-R96-2: TP remains unchanged when trailing activates.
+
+---
+
+*End of STRATEGY_SPEC.md v1.1*
+
+
+---
+
+## New Rules — v1.2: Multi-Timeframe Analysis, Market Clarity Engine, Two-Position Execution
+
+---
+
+### R97 — H4 trend filter
+**Status:** ✅ APPROVED
+
+**Rule:** Before a setup can advance past SWEEP_CONFIRMED, the H4 chart must confirm macro directional alignment. H4 trend is defined by confirmed swing structure:
+
+- **Bullish H4 trend:** The most recent confirmed H4 swing low is higher than the one before it AND the most recent confirmed H4 swing high is higher than the one before it (higher highs + higher lows).
+- **Bearish H4 trend:** Lower highs + lower lows on H4 confirmed swings.
+
+H4 swings are confirmed using the same pivot method (R12) with `pivot_left_bars=2, pivot_right_bars=2` applied to H4 candles.
+
+A **bullish H1 setup** requires a bullish H4 trend. A **bearish H1 setup** requires a bearish H4 trend. If H4 trend is neutral (insufficient swing data) or opposite to the H1 setup, the setup is **rejected** with reason `"H4 trend does not confirm H1 direction (R97)"`.
+
+**Configurable parameter:** `h4_trend_filter_enabled` (default `True`).
+
+**Test requirement:** T-R97-1: Bullish setup rejected when H4 shows lower highs/lows. T-R97-2: Bullish setup approved when H4 shows higher highs/lows. T-R97-3: Filter correctly disabled when h4_trend_filter_enabled=False.
+
+---
+
+### R98 — M15 entry trigger
+**Status:** ✅ APPROVED
+
+**Rule:** When `entry_timeframe = "M15"` (the new default), the entry trigger fires on a completed **M15 candle close** beyond the frozen reference candle's trigger level, instead of waiting for an H1 candle close (R29).
+
+The reference candle and trigger level are still identified on H1 (R21–R24). The M15 trigger is evaluated every time a completed M15 candle closes beyond that level.
+
+All other entry pre-checks (R32 checklist) still apply.
+
+**Configurable parameter:** `entry_timeframe` (default `"M15"`, alternative `"H1"` for backward compatibility).
+
+**Test requirement:** T-R98-1: M15 trigger fires on M15 candle close beyond H1 trigger level. T-R98-2: H1 trigger still works when entry_timeframe="H1". T-R98-3: M15 trigger does not fire before gap exit is confirmed.
+
+---
+
+### R99 — Market Clarity Score definition
+**Status:** ✅ APPROVED
+
+**Rule:** The Market Clarity Score (MCS) is an integer from 0 to 100 computed from the quality of the current setup. It evaluates existing conditions — it does not independently generate entries.
+
+**A high MCS is not a probability of winning.** It must never be displayed as such.
+
+Scoring components (sum = 100 points maximum):
+
+| # | Component | Points | Condition |
+|---|---|---|---|
+| MCS-1 | Valid H1 FVG | 20 | FVG confirmed, size filter passes |
+| MCS-2 | Confirmed liquidity sweep | 20 | Sweep confirmed with close-back (R15/R16) |
+| MCS-3 | Confirmed structure break | 20 | Trigger level broken on M15 or H1 close |
+| MCS-4 | Sufficient distance to opposing liquidity | 15 | TP1 distance ≥ 2 × SL distance (structural target exists) |
+| MCS-5 | Strong displacement candle | 10 | Sweep candle body ≥ 60% of candle range |
+| MCS-6 | H4 directional alignment | 10 | H4 trend confirmed (R97) |
+| MCS-7 | Spread and volatility | 5 | Spread within configured limit AND ATR within normal range |
+
+**Configurable thresholds:**
+
+| Threshold | Default | Meaning |
+|---|---|---|
+| `clarity_reject_below` | 60 | Score < 60 → reject setup |
+| `clarity_one_position` | 60 | 60–74 → one position only |
+| `clarity_two_positions` | 75 | 75–84 → two positions if TP2 qualifies |
+| `clarity_high_confluence` | 85 | 85–100 → high-confluence, all checks mandatory |
+
+**Test requirement:** T-R99-1: Each component scored independently. T-R99-2: Setup rejected when score < 60. T-R99-3: Two positions only when score ≥ 75.
+
+---
+
+### R100 — Setup quality grade
+**Status:** ✅ APPROVED
+
+**Rule:** The setup quality grade is derived from the Market Clarity Score:
+
+| Grade | MCS range | Risk allocation |
+|---|---|---|
+| A | 85–100 | 1.5% of equity |
+| B | 60–84 | 1.0% of equity |
+| C | < 60 | Setup rejected — 0% |
+
+**Configurable parameters:**
+- `grade_a_min_score` (default `85`)
+- `grade_b_min_score` (default `60`)
+- `grade_a_risk_pct` (default `1.5`)
+- `grade_b_risk_pct` (default `1.0`)
+- `grade_a_risk_pct_max` (default `1.5`) — absolute maximum regardless of grade
+
+**These percentages are proposed defaults, not proven optimal values.**
+
+**Test requirement:** T-R100-1: Grade A assigned at score ≥ 85. T-R100-2: Grade B assigned at score 60–84. T-R100-3: Grade A allocates 1.5% risk. T-R100-4: Grade B allocates 1.0% risk.
+
+---
+
+### R101 — Opposing market structure detection
+**Status:** ✅ APPROVED
+
+**Rule:** Before opening a trade, the engine identifies the next meaningful opposing market structure on H1.
+
+For **bullish setups**, identify:
+1. The nearest confirmed H1 swing high above the entry price.
+2. Buy-side liquidity above that swing high.
+3. Any bearish H1 FVG between entry and the swing high.
+4. The most conservative of these as the structural barrier.
+
+For **bearish setups**, identify:
+1. The nearest confirmed H1 swing low below the entry price.
+2. Sell-side liquidity below that swing low.
+3. Any bullish H1 FVG between entry and the swing low.
+4. The most conservative of these as the structural barrier.
+
+Rules:
+- Do not use arbitrary pip distances as substitutes for market structure.
+- Place TP preferably **before** the opposing zone (not inside it).
+- If no valid opposing structure can be identified, set `tp1_structural = None` and fall back to minimum-RR-based TP only.
+- The detection is deterministic, reproducible, and logged with the candle timestamps of the identified structure.
+
+**Test requirement:** T-R101-1: Nearest swing high identified correctly. T-R101-2: TP placed before opposing zone when structure exists. T-R101-3: Returns None when no structure found.
+
+---
+
+### R102 — TP1 calculation (structural)
+**Status:** ✅ APPROVED
+
+**Rule:** TP1 is the first exit target.
+
+Calculation order:
+1. Identify the nearest opposing structural barrier (R101).
+2. Place TP1 **2 ticks before** the structural barrier (conservative — avoid placing inside the zone).
+3. Verify TP1 satisfies minimum 1:2 R:R against the setup SL.
+4. If structural TP1 < minimum-RR TP, use the minimum-RR TP instead.
+5. If minimum-RR TP is still not achievable (SL too wide for the available structure), **reject the setup** with reason `"TP1 below minimum 1:2 R:R"`.
+
+**Configurable parameter:** `tp1_min_rr` (default `2.0`).
+
+**Test requirement:** T-R102-1: TP1 placed before structural barrier. T-R102-2: TP1 satisfies 1:2 minimum. T-R102-3: Setup rejected when TP1 cannot be achieved.
+
+---
+
+### R103 — TP2 calculation (structural)
+**Status:** ✅ APPROVED
+
+**Rule:** TP2 is the second exit target, used only when two-position execution is active.
+
+Calculation order:
+1. Beyond TP1, identify the next meaningful opposing structural barrier (second swing high/low, second FVG, or major liquidity zone).
+2. Place TP2 **2 ticks before** that second barrier.
+3. Verify TP2 satisfies minimum 1:3 R:R.
+4. TP2 must not be calculated by blindly extending TP1 by a fixed distance.
+5. If TP2 cannot be reliably identified or does not meet 1:3 R:R, **TP2 = None** and two-position execution falls back to one-position.
+
+**Configurable parameter:** `tp2_min_rr` (default `3.0`).
+
+**Test requirement:** T-R103-1: TP2 requires identifiable second structure. T-R103-2: TP2 satisfies 1:3 minimum. T-R103-3: Falls back to one position when TP2 not available.
+
+---
+
+### R104 — Two-position activation conditions
+**Status:** ✅ APPROVED
+
+**Rule:** Two positions may be opened for a single setup only when ALL of the following are true simultaneously:
+
+1. Existing strategy entry signal is valid (full sequence R19 complete).
+2. Market Clarity Score ≥ 75 (R99).
+3. TP1 qualifies at minimum 1:2 R:R (R102).
+4. TP2 qualifies at minimum 1:3 R:R (R103).
+5. TP2 distance ≥ 3 × ATR(14) from entry (market is "clear" — TF-7).
+6. Total combined risk ≤ grade risk budget (R100).
+7. Broker execution conditions are valid (spread, margin, symbol).
+8. No duplicate setup exists for this symbol.
+9. Daily limits and lockouts pass (R50, R54, R58).
+10. `two_position_mode_enabled = True` in settings.
+
+If ANY condition fails → fall back to one position (if MCS ≥ 60) or reject (if MCS < 60).
+
+**Configurable parameter:** `two_position_mode_enabled` (default `True`), `tp2_min_atr_distance` (default `3.0`).
+
+**Test requirement:** T-R104-1 through T-R104-10: One test per condition that confirms fallback to one position when that condition alone fails.
+
+---
+
+### R105 — Position A specification
+**Status:** ✅ APPROVED
+
+**Rule:**
+- Entry: same strategy entry price as defined by R14.
+- SL: same structural SL as defined by R35/R36.
+- TP: TP1 (R102).
+- Risk allocation: 50% of total setup risk budget (e.g. 0.5% when grade B budget is 1.0%).
+- Volume: calculated using 50% risk allocation with full broker symbol specs (R45/R46).
+
+---
+
+### R106 — Position B specification
+**Status:** ✅ APPROVED
+
+**Rule:**
+- Entry: same strategy entry price as Position A.
+- SL: same structural SL as Position A.
+- TP: TP2 (R103).
+- Risk allocation: 50% of total setup risk budget.
+- Volume: calculated using 50% risk allocation.
+- Position B uses the same setup ID as Position A — they are one setup with two exits.
+
+**Test requirement:** T-R106-1: Position A and B share setup_id. T-R106-2: Total risk ≤ grade budget.
+
+---
+
+### R107 — Total risk budget enforcement
+**Status:** ✅ APPROVED
+
+**Rule:** The combined monetary risk of Position A and Position B must never exceed the grade risk budget:
+
+```
+position_a_risk + position_b_risk ≤ equity × grade_risk_pct / 100
+```
+
+If rounding causes a fractional overage, reduce Position B volume, not Position A.
+
+**Test requirement:** T-R107-1: Combined risk never exceeds grade budget. T-R107-2: Position B volume reduced when budget would be exceeded.
+
+---
+
+### R108 — Execution reconciliation for two positions
+**Status:** ✅ APPROVED
+
+**Rule:** Position A and Position B are submitted as independent orders with independent client order IDs (IMPL4). Each submission is independently confirmed.
+
+If Position A fills but Position B fails:
+1. Do NOT automatically retry Position B.
+2. Reconcile actual broker positions.
+3. Log partial execution with exact MT5 retcodes.
+4. Position A remains open with its SL and TP confirmed.
+5. Alert: `"PARTIAL EXECUTION: Position A filled, Position B failed — {reason}"`.
+6. Apply configured recovery policy (default: leave Position A open, do not retry B).
+
+**Configurable parameter:** `partial_execution_policy` (`"leave_a_open"` default; `"close_a_if_b_fails"` alternative).
+
+**Test requirement:** T-R108-1: Position A left open when B fails (default policy). T-R108-2: Alert raised on partial execution. T-R108-3: No retry of B without explicit trigger.
+
+---
+
+### R109 — Break-even after TP1 hit (two-position mode)
+**Status:** ✅ APPROVED
+
+**Rule:** When Position A closes at TP1, the engine may optionally move Position B's SL to break-even (entry price ± configured offset).
+
+Rules:
+- This move is separate from the R89 break-even trigger (which fires at 50% of TP distance).
+- The offset is configurable: `be_offset_after_tp1` (default `2 × tick_size` beyond entry, toward TP).
+- The move requires broker confirmation (R91).
+- Never widens Position B's original risk.
+
+**Configurable parameter:** `move_b_to_be_after_tp1` (default `True`), `be_offset_after_tp1_ticks` (default `2`).
+
+**Test requirement:** T-R109-1: Position B SL moves to entry + offset when A closes at TP1. T-R109-2: Move skipped when disabled. T-R109-3: SL never moves against Position B.
+
+---
+
+### R110 — Daily setup counter (two-position mode)
+**Status:** ✅ APPROVED
+
+**Rule:** One setup (regardless of how many positions it generates) counts as **one entry** toward the daily 5-trade limit (R50). Opening Position A and Position B from the same setup is counted as **one new entry**, not two.
+
+The daily limit applies **per symbol independently** (TF-6 confirmed).
+
+**Test requirement:** T-R110-1: Two positions from one setup count as one daily entry. T-R110-2: XAUUSD and BTCUSD daily limits are independent.
+
+---
+
+### R111–R130 — Backtesting modes
+**Status:** ✅ APPROVED
+
+Three backtesting modes are defined (Part 11 of the implementation spec):
+
+| Mode | Description |
+|---|---|
+| MODE A | One position, TP at 1:2 |
+| MODE B | Two positions: Position A TP=1:2, Position B TP=1:3 or structural TP2 |
+| MODE C | One position with optional trailing stop after break-even |
+
+Each mode must produce a report including: number of trades, win rate, average R, profit factor, net profit after costs, max drawdown, longest losing streak, TP1 hit rate, TP2 hit rate, expectancy, spread impact, commission impact, slippage impact, performance by session, performance by volatility regime.
+
+No look-ahead bias, repainting, or unrealistic fill assumptions.
+
+Separate in-sample, out-of-sample, and walk-forward evaluation.
+
+---
+
+*End of STRATEGY_SPEC.md v1.2*

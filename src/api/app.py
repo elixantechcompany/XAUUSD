@@ -169,6 +169,12 @@ class SetupSummary(BaseModel):
     proposed_sl: float | None
     proposed_tp: float | None
     estimated_rr: float | None
+    clarity_score: int | None = None
+    clarity_grade: str | None = None
+    positions_permitted: int | None = None
+    tp1_structural: float | None = None
+    tp2_structural: float | None = None
+    h4_trend: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -283,6 +289,12 @@ def list_setups(
             proposed_entry=r.proposed_entry,
             proposed_sl=r.proposed_sl, proposed_tp=r.proposed_tp,
             estimated_rr=r.estimated_rr,
+            clarity_score=r.clarity_score,
+            clarity_grade=r.clarity_grade,
+            positions_permitted=r.positions_permitted,
+            tp1_structural=r.tp1_structural,
+            tp2_structural=r.tp2_structural,
+            h4_trend=r.h4_trend,
             created_at=r.created_at, updated_at=r.updated_at,
         )
         for r in rows
@@ -318,6 +330,14 @@ def get_setup(
         "proposed_volume": row.proposed_volume,
         "estimated_risk_usd": row.estimated_risk_usd,
         "estimated_rr": row.estimated_rr,
+        "clarity_score": row.clarity_score,
+        "clarity_grade": row.clarity_grade,
+        "positions_permitted": row.positions_permitted,
+        "tp1_structural": row.tp1_structural,
+        "tp2_structural": row.tp2_structural,
+        "tp1_rr_ratio": row.tp1_rr_ratio,
+        "tp2_rr_ratio": row.tp2_rr_ratio,
+        "h4_trend": row.h4_trend,
         "rejection_reason": row.rejection_reason,
         "spec_version": row.spec_version,
         "created_at": row.created_at.isoformat(),
@@ -762,3 +782,84 @@ def get_copied_trades():
     ]
 
 
+
+
+# ── Child account (copy-trading) credential endpoint ─────────────────────────
+
+class ChildAccountRequest(BaseModel):
+    account_id: int
+    password: str
+    server: str
+    label: str = ""
+    risk_multiplier: float = 1.0
+
+
+@app.post("/accounts/child-credential", tags=["Accounts"])
+def save_child_credential(
+    req: ChildAccountRequest,
+    _: Annotated[str, Depends(_current_user)],
+) -> dict:
+    """
+    Store child copy-trading account credentials in Windows Credential Manager.
+
+    The password is NEVER logged or stored in the database.
+    Only the account_id, server, label, and risk_multiplier are returned in the response.
+    """
+    try:
+        from src.utils.credentials import CredentialManager
+        mgr = CredentialManager()
+        ok = mgr.store_child_account(
+            account_id=req.account_id,
+            password=req.password,
+            server=req.server,
+            label=req.label,
+            risk_multiplier=req.risk_multiplier,
+        )
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to store child credentials")
+        log.info("child_credential_saved", account_id=req.account_id, server=req.server)
+        return {
+            "status": "ok",
+            "account_id": req.account_id,
+            "server": req.server,
+            "label": req.label,
+            "message": f"Child account {req.account_id} registered for copy-trading.",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/accounts/child-accounts", tags=["Accounts"])
+def list_child_accounts(_: Annotated[str, Depends(_current_user)]) -> list[dict]:
+    """List registered child copy-trading accounts (no passwords returned)."""
+    try:
+        from src.utils.credentials import CredentialManager
+        mgr = CredentialManager()
+        accounts = mgr.get_child_accounts()
+        # Strip passwords before returning
+        return [
+            {
+                "account_id": a["account_id"],
+                "server": a["server"],
+                "label": a.get("label", ""),
+                "risk_multiplier": a.get("risk_multiplier", 1.0),
+            }
+            for a in accounts
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/accounts/child-accounts/{account_id}", tags=["Accounts"])
+def remove_child_account(
+    account_id: int,
+    _: Annotated[str, Depends(_current_user)],
+) -> dict:
+    """Remove a child copy-trading account."""
+    try:
+        from src.utils.credentials import CredentialManager
+        mgr = CredentialManager()
+        ok = mgr.delete_child_account(account_id)
+        return {"status": "ok" if ok else "not_found", "account_id": account_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

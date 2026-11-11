@@ -1,22 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-
-const DEFAULT_SUPABASE_URL = "https://bntqfzopbbeosruzjxbw.supabase.co";
-const DEFAULT_SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJudHFmem9wYmJlb3NydXpqeGJ3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MzM1OTEzOSwiZXhwIjoyMTA4OTM1MTM5fQ.jA3JXlfvnisozH2-beLVFkIBqEbMz9UGDmHAlewiNCQ";
+import { getServiceHeaders, getSupabaseUrl } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const requestedSymbol = (searchParams.get("symbol") || "BTCUSD").toUpperCase();
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_SERVICE_KEY;
-
-    const headers = {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    };
+    const supabaseUrl = getSupabaseUrl();
+    const headers     = getServiceHeaders();
 
     const res = await fetch(
       `${supabaseUrl}/rest/v1/settings?select=value,updated_at&key=eq.live_market_data&limit=1`,
@@ -25,9 +16,9 @@ export async function GET(request: NextRequest) {
 
     if (res.ok) {
       const rows = await res.json();
-      if (rows && rows.length > 0 && rows[0].value) {
+      if (rows?.length > 0 && rows[0].value) {
         const val = rows[0].value;
-        const symData = val[requestedSymbol] || (requestedSymbol === "XAUUSD" ? val.XAUUSD : val.BTCUSD);
+        const symData = val[requestedSymbol] || null;
         return NextResponse.json(
           {
             success: true,
@@ -39,16 +30,11 @@ export async function GET(request: NextRequest) {
             open_positions: val.open_positions || [],
             data: symData,
           },
-          {
-            headers: {
-              "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2",
-            },
-          }
+          { headers: { "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2" } }
         );
       }
     }
 
-    // Fallback if DB record not ready
     return NextResponse.json({
       success: true,
       symbol: requestedSymbol,
@@ -60,7 +46,9 @@ export async function GET(request: NextRequest) {
       data: null,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Error fetching market data";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Error fetching market data" },
+      { status: 500 }
+    );
   }
 }

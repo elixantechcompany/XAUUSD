@@ -25,7 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.utils.database import Base
 
 # ── Spec version (kept here so models can reference it without circular imports)
-SPEC_VERSION = "1.0"
+SPEC_VERSION = "1.2"
 
 
 # ── State enum (IMPL3 ✅) ─────────────────────────────────────────────────────
@@ -138,8 +138,23 @@ class Setup(Base):
     rejection_reason: Mapped[str | None] = mapped_column(Text)
 
     # ── Spec traceability (IMPL2) ─────────────────────────────────────────────
-    spec_version: Mapped[str] = mapped_column(String(16), default="1.0")
+    spec_version: Mapped[str] = mapped_column(String(16), default="1.2")
     spec_hash: Mapped[str | None] = mapped_column(String(64))
+
+    # ── Clarity score (R99–R100, v1.2) ───────────────────────────────────────
+    clarity_score: Mapped[int | None] = mapped_column(Integer)
+    clarity_grade: Mapped[str | None] = mapped_column(String(4))
+    positions_permitted: Mapped[int | None] = mapped_column(Integer)
+    clarity_components_json: Mapped[str | None] = mapped_column(Text)
+
+    # ── TP1 / TP2 structural targets (R102/R103, v1.2) ───────────────────────
+    tp1_structural: Mapped[float | None] = mapped_column(Float)
+    tp2_structural: Mapped[float | None] = mapped_column(Float)
+    tp1_rr_ratio: Mapped[float | None] = mapped_column(Float)
+    tp2_rr_ratio: Mapped[float | None] = mapped_column(Float)
+
+    # ── H4 trend at time of setup (R97, v1.2) ────────────────────────────────
+    h4_trend: Mapped[str | None] = mapped_column(String(12))  # BULLISH/BEARISH/NEUTRAL
 
     # ── Relationships ─────────────────────────────────────────────────────────
     transitions: Mapped[list["SetupTransition"]] = relationship(
@@ -206,6 +221,23 @@ class Order(Base):
     sl_confirmed_by_broker: Mapped[bool] = mapped_column(Boolean, default=False)
     sl_broker_ticket: Mapped[int | None] = mapped_column(Integer)
     sl_retry_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # ── Break-even + trailing stop state (R89–R96, spec v1.1) ────────────────
+    # Current live SL (updated as break-even and trailing fire)
+    current_sl: Mapped[float | None] = mapped_column(Float)
+    # Original SL at entry — never changes, used for audit
+    original_sl: Mapped[float | None] = mapped_column(Float)
+    # Whether break-even has fired and been broker-confirmed for this position
+    breakeven_fired: Mapped[bool] = mapped_column(Boolean, default=False)
+    breakeven_fired_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Whether trailing stop is currently active
+    trailing_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Highest close seen since entry (bull) / lowest close seen since entry (bear)
+    # Used to compute the trailing stop level — updated on each H1 close
+    best_close_since_entry: Mapped[float | None] = mapped_column(Float)
+    # Last trailing SL value set and confirmed by the broker
+    last_trailing_sl: Mapped[float | None] = mapped_column(Float)
+    last_trailing_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     # ── Outcome ───────────────────────────────────────────────────────────────
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)

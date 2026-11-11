@@ -30,13 +30,15 @@ export default function TradesPage() {
 
   useEffect(() => {
     fetchTradesList();
-    const interval = setInterval(fetchTradesList, 3500);
+    const interval = setInterval(fetchTradesList, 2000);
     return () => clearInterval(interval);
   }, [fetchTradesList]);
 
   const open = trades.filter((t) => !t.close_time);
   const history = trades.filter((t) => t.close_time);
   const shown = tab === "open" ? open : history;
+  const totalFloatingPnl = open.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const totalRealizedPnl = history.reduce((sum, t) => sum + (t.pnl || 0), 0);
 
   async function handleClosePosition(ticket: string, symbol: string) {
     setClosingTicket(ticket);
@@ -130,26 +132,53 @@ export default function TradesPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-surface-2 border border-border rounded p-1 w-fit">
-        {(["open", "history"] as const).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cn(
-              "px-4 py-1.5 rounded text-xs font-bold transition-all min-h-[38px] flex items-center gap-1.5",
-              tab === t ? "bg-accent text-white shadow-xs" : "text-text-secondary hover:text-text-primary"
-            )}
-          >
-            {t === "open" ? (
-              <>
-                <span className={cn("w-2 h-2 rounded-full", open.length > 0 ? "bg-emerald-400 animate-pulse" : "bg-text-secondary")} />
-                <span>Live Open Positions ({open.length})</span>
-              </>
-            ) : (
-              <span>Execution History ({history.length})</span>
-            )}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-1 bg-surface-2 border border-border rounded p-1 w-fit">
+          {(["open", "history"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={cn(
+                "px-4 py-1.5 rounded text-xs font-bold transition-all min-h-[38px] flex items-center gap-1.5",
+                tab === t ? "bg-accent text-white shadow-xs" : "text-text-secondary hover:text-text-primary"
+              )}
+            >
+              {t === "open" ? (
+                <>
+                  <span className={cn("w-2 h-2 rounded-full", open.length > 0 ? "bg-emerald-400 animate-pulse" : "bg-text-secondary")} />
+                  <span>Live Open Positions ({open.length})</span>
+                </>
+              ) : (
+                <span>Execution History ({history.length})</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        {tab === "open" && open.length > 0 && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-xs">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-text-secondary font-medium">Live Floating P/L:</span>
+            <span className={cn(
+              "font-extrabold tabular-nums",
+              totalFloatingPnl >= 0 ? "text-profit" : "text-loss"
+            )}>
+              {formatPnl(totalFloatingPnl)}
+            </span>
+          </div>
+        )}
+
+        {tab === "history" && history.length > 0 && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-surface border border-border text-xs">
+            <span className="text-text-secondary font-medium">Total Realized P/L:</span>
+            <span className={cn(
+              "font-extrabold tabular-nums",
+              totalRealizedPnl >= 0 ? "text-profit" : "text-loss"
+            )}>
+              {formatPnl(totalRealizedPnl)}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="bg-surface border border-border rounded-card overflow-x-auto shadow-sm">

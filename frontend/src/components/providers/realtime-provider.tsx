@@ -1,48 +1,76 @@
 "use client";
-import { useEffect, type ReactNode } from "react";
+
+/**
+ * RealtimeProvider
+ *
+ * Wires the Supabase Realtime subscriptions AND a polling fallback.
+ * Polling runs every 8 seconds so the dashboard never stays stale even
+ * when the WebSocket connection drops or Realtime is slow to deliver.
+ *
+ * Priority:   Realtime push  (instant, ~100ms)
+ * Fallback:   HTTP poll      (every 8s, guarantees freshness)
+ */
+import { useEffect, useRef, type ReactNode } from "react";
 import {
-  getLatestHeartbeat, getLatestAccountSnapshot,
-  getSignals, getRecentCommands,
-  subscribeToHeartbeat, subscribeToSignals, subscribeToCommandUpdates,
+  getLatestHeartbeat,
+  getLatestAccountSnapshot,
+  getSignals,
+  getRecentCommands,
+  subscribeToHeartbeat,
+  subscribeToSignals,
+  subscribeToCommandUpdates,
 } from "@/lib/supabase/queries";
 import { useBotStore } from "@/lib/store";
 
+const POLL_INTERVAL_MS = 8_000;   // 8 seconds — shows ONLINE within one cycle
+
 export function RealtimeProvider({ children }: { children: ReactNode }) {
-  const { setHeartbeat, setAccount, upsertSignal, updateCommand,
-          setInitialSignals, setInitialCommands } = useBotStore();
+  const {
+    setHeartbeat,
+    setAccount,
+    upsertSignal,
+    updateCommand,
+    setInitialSignals,
+    setInitialCommands,
+  } = useBotStore();
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function refreshAll() {
+    try {
+      const [hb, acc, sigs, cmds] = await Promise.allSettled([
+        getLatestHeartbeat(),
+        getLatestAccountSnapshot(),
+        getSignals({ limit: 50 }),
+        getRecentCommands(),
+      ]);
+
+      if (hb.status === "fulfilled" && hb.value)     setHeartbeat(hb.value);
+      if (acc.status === "fulfilled" && acc.value)   setAccount(acc.value);
+      if (sigs.status === "fulfilled")               setInitialSignals(sigs.value);
+      if (cmds.status === "fulfilled")               setInitialCommands(cmds.value);
+    } catch {
+      // Non-fatal — next poll will retry
+    }
+  }
 
   useEffect(() => {
-    async function syncTelemetry() {
-      try {
-        const res = await fetch("/api/telemetry/heartbeat", { cache: "no-store" });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.heartbeat) setHeartbeat(data.heartbeat);
-          if (data.snapshot) setAccount(data.snapshot);
-        }
-      } catch {
-        // ignore
-      }
-    }
+    // 1. Immediate first load
+    refreshAll();
 
-    // Fast initial telemetry load
-    syncTelemetry();
-
-    // Background non-blocking historical queries
-    getSignals({ limit: 30 }).then(setInitialSignals).catch(() => {});
-    getRecentCommands(15).then(setInitialCommands).catch(() => {});
-
-    // Active polling interval every 3.5s to ensure zero latency
-    const intervalId = setInterval(syncTelemetry, 3500);
-
-    // Realtime subscriptions for signals & commands
+    // 2. Realtime subscriptions (instant push)
+    const hbSub  = subscribeToHeartbeat(setHeartbeat);
     const sigSub = subscribeToSignals(upsertSignal);
     const cmdSub = subscribeToCommandUpdates(updateCommand);
 
+    // 3. Polling fallback — runs regardless of Realtime status
+    pollRef.current = setInterval(refreshAll, POLL_INTERVAL_MS);
+
     return () => {
-      clearInterval(intervalId);
+      hbSub.unsubscribe();
       sigSub.unsubscribe();
       cmdSub.unsubscribe();
+      if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

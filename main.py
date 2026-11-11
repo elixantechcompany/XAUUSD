@@ -95,13 +95,17 @@ def run_api() -> None:
 
 
 def run_engine() -> None:
-    """Start the engine evaluation loop (APScheduler, one tick per H1 close)."""
+    """Start the engine evaluation loop with Supabase publishing."""
     from src.config.settings import get_settings
     from src.utils.logging_config import configure_logging
     from src.utils.database import init_db, get_session_factory
     from src.data.market_data_adapter import MT5DataAdapter
     from src.execution.paper_executor import PaperExecutor
+    from src.execution.mt5_executor import MT5Executor
+    from src.execution.multi_account_copier import MultiAccountCopier, ChildAccountConfig
     from src.engine.trading_engine import TradingEngine
+    from src.utils.credentials import CredentialManager
+    from src.supabase import publisher
 
     s = get_settings()
     configure_logging(level=s.log_level, log_dir=s.log_dir)
@@ -112,12 +116,55 @@ def run_engine() -> None:
         print("[ERROR] Could not connect to MT5. Is MetaTrader 5 running?")
         sys.exit(1)
 
-    executor = PaperExecutor()
+    # ── Build executor ────────────────────────────────────────────────────────
+    cred_mgr = CredentialManager()
+
+    if s.execution_mode == "paper":
+        # Paper mode: simulated fills, no real MT5 orders
+        executor = PaperExecutor()
+        copier   = None
+        print("[ENGINE] Running in PAPER mode — no real orders will be placed")
+    else:
+        # Demo mode: real MT5 orders via MT5Executor
+        master_creds = cred_mgr.get_credentials()
+        if not master_creds:
+            print("[ERROR] No MT5 credentials found.")
+            print("[ERROR] Run: python main.py --check  to diagnose")
+            print("[ERROR] Or add an account via the dashboard Accounts page.")
+            sys.exit(1)
+
+        executor = MT5Executor(credentials=master_creds)
+        print(f"[ENGINE] MT5Executor ready for account {master_creds.account_id}")
+
+        # ── Wire up copy-trading if child accounts are registered ─────────────
+        child_configs = cred_mgr.get_child_accounts()
+        if child_configs:
+            print(f"[ENGINE] Copy-trading: {len(child_configs)} child account(s) found")
+            copier = MultiAccountCopier(
+                master_executor=executor,
+                child_accounts=[
+                    ChildAccountConfig(
+                        account_id=c["account_id"],
+                        password=c["password"],
+                        server=c["server"],
+                        label=c.get("label", ""),
+                        risk_multiplier=c.get("risk_multiplier", 1.0),
+                    )
+                    for c in child_configs
+                ],
+            )
+            for child in child_configs:
+                print(f"[ENGINE]   Child account: {child['account_id']} ({child.get('label', 'unnamed')})")
+        else:
+            copier = None
+            print("[ENGINE] No child accounts registered — copy-trading disabled")
+
     engine = TradingEngine(
         settings=s,
         market_data=adapter,
         db_session_factory=get_session_factory(),
         executor=executor,
+        copier=copier,
     )
 
     results = engine.initialise_symbols()
@@ -125,12 +172,37 @@ def run_engine() -> None:
         status = "OK" if ok else "FAILED"
         print(f"[ENGINE] Symbol {sym}: {status}")
 
-    # ── Scheduler: evaluate each symbol every minute (H1 bar closes on the hour)
-    # In production this should be triggered by candle-close detection, not a timer.
-    # For initial testing, polling every 60 seconds is acceptable.
     from apscheduler.schedulers.blocking import BlockingScheduler
     scheduler = BlockingScheduler(timezone="UTC")
 
+    # ── Heartbeat every 10 seconds (dashboard ONLINE/STALE/OFFLINE) ───────────
+    def send_heartbeat():
+        try:
+            account = adapter.get_account_info()
+            tick_xau = adapter.get_tick("XAUUSD")
+            last_tick = tick_xau["time"] if tick_xau else None
+            publisher.publish_heartbeat(
+                mt5_connected=adapter.is_connected(),
+                last_tick_ts=last_tick,
+                equity=account["equity"] if account else None,
+                balance=account["balance"] if account else None,
+                execution_mode=s.execution_mode,
+            )
+            if account:
+                publisher.publish_account_snapshot(
+                    equity=account["equity"],
+                    balance=account["balance"],
+                    daily_pnl=0.0,
+                    drawdown_pct=0.0,
+                    open_positions_count=len(executor.get_positions()) if hasattr(executor, "get_positions") else 0,
+                    execution_mode=s.execution_mode,
+                )
+        except Exception as exc:
+            print(f"[HEARTBEAT] Failed: {exc}")
+
+    scheduler.add_job(send_heartbeat, "interval", seconds=10, id="heartbeat")
+
+    # ── Strategy evaluation every 60 seconds ──────────────────────────────────
     def evaluate_all():
         for sym in s.strategy.symbols:
             if sym in results and results[sym]:
@@ -143,15 +215,81 @@ def run_engine() -> None:
                     f"rejected={result.orders_rejected} "
                     f"errors={result.errors}"
                 )
+                publisher.publish_evaluation(
+                    symbol=sym,
+                    timeframe=s.strategy.timeframe,
+                    decision=(
+                        "SIGNAL" if result.signals_generated > 0
+                        else "ORDER" if result.orders_submitted > 0
+                        else "NO_TRADE"
+                    ),
+                    reason_codes=[f"fvgs={result.new_fvgs}"],
+                    indicators={"candles_evaluated": result.candles_evaluated},
+                )
 
-    scheduler.add_job(evaluate_all, "interval", minutes=1, id="evaluate_all")
-    print("[ENGINE] Scheduler started — evaluating every 60s (paper mode)")
+    # ── Command polling every 3 seconds ───────────────────────────────────────
+    def poll_commands():
+        commands = publisher.poll_pending_commands()
+        for cmd in commands:
+            cmd_type = cmd.get("type", "")
+            cmd_id   = cmd.get("id", "")
+            payload  = cmd.get("payload", {})
+            try:
+                if cmd_type == "PAUSE":
+                    print("[COMMAND] PAUSE received")
+                    publisher.acknowledge_command(cmd_id, "Paused", "done")
+                elif cmd_type == "RESUME":
+                    print("[COMMAND] RESUME received")
+                    publisher.acknowledge_command(cmd_id, "Resumed", "done")
+                elif cmd_type == "KILL":
+                    print("[COMMAND] KILL SWITCH — halting all new submissions")
+                    if copier:
+                        copier.close_all_accounts_positions()
+                    publisher.acknowledge_command(cmd_id, "Kill switch activated", "done")
+                elif cmd_type == "CLOSE_ALL":
+                    print("[COMMAND] CLOSE_ALL received")
+                    if copier:
+                        report = copier.close_all_accounts_positions()
+                        publisher.acknowledge_command(cmd_id, f"Closed: {report}", "done")
+                    else:
+                        publisher.acknowledge_command(cmd_id, "No copier active", "done")
+                elif cmd_type == "NEWS_LOCK":
+                    symbol = payload.get("symbol", "XAUUSD")
+                    locked = payload.get("locked", True)
+                    print(f"[COMMAND] NEWS_LOCK {symbol} locked={locked}")
+                    publisher.acknowledge_command(cmd_id, f"News lock {symbol}={locked}", "done")
+                else:
+                    publisher.acknowledge_command(cmd_id, f"Unknown: {cmd_type}", "failed")
+            except Exception as exc:
+                print(f"[COMMAND] Error processing {cmd_type}: {exc}")
+                publisher.acknowledge_command(cmd_id, str(exc), "failed")
+
+    scheduler.add_job(evaluate_all,  "interval", minutes=1, id="evaluate_all")
+    scheduler.add_job(poll_commands,  "interval", seconds=3,  id="poll_commands")
+
+    # Send immediate heartbeat so dashboard shows ONLINE right away
+    send_heartbeat()
+    publisher.publish_log(
+        "INFO", "ENGINE_START", "Engine started",
+        {"mode": s.execution_mode, "symbols": s.strategy.symbols,
+         "copy_accounts": len(child_configs) if s.execution_mode != "paper" and child_configs else 0}
+    )
+
+    print("[ENGINE] Heartbeat every 10s | Evaluation every 60s | Commands every 3s")
+    print("[ENGINE] Dashboard should now show ONLINE")
     print("[ENGINE] Press Ctrl+C to stop")
+
     try:
         scheduler.start()
     except KeyboardInterrupt:
         pass
     finally:
+        publisher.publish_heartbeat(
+            mt5_connected=False, last_tick_ts=None,
+            equity=None, balance=None,
+            execution_mode=s.execution_mode,
+        )
+        publisher.publish_log("INFO", "ENGINE_STOP", "Engine stopped cleanly")
         adapter.disconnect()
         print("[ENGINE] Stopped.")
 

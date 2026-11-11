@@ -33,6 +33,7 @@ import {
 import { formatPrice, cn } from "@/lib/utils";
 import { useBotStore } from "@/lib/store";
 import { TradingViewLiveChart } from "./tradingview-live-chart";
+import { FvgForecastTool } from "@/components/signals/fvg-forecast-tool";
 
 interface Candle {
   time: string;
@@ -59,7 +60,7 @@ export function InteractiveForecastChart({
   const [chartViewMode, setChartViewMode] = useState<"tradingview" | "smc_matrix">("tradingview");
   const [activeStep, setActiveStep] = useState<SmcStep>("ALL");
   const [isPlayingCycle, setIsPlayingCycle] = useState(false);
-  const [activeTab, setActiveTab] = useState<"calculator" | "reasons" | "macro" | "simulator">("calculator");
+  const [activeTab, setActiveTab] = useState<"forecast" | "calculator" | "reasons" | "macro" | "simulator">("forecast");
   const [isAutoSimulating, setIsAutoSimulating] = useState(false);
   const [simulationSpeed, setSimulationSpeed] = useState<1 | 2>(1);
   const [studyAnalyzing, setStudyAnalyzing] = useState(false);
@@ -599,490 +600,514 @@ export function InteractiveForecastChart({
       </div>
 
       {chartViewMode === "tradingview" ? (
-        <TradingViewLiveChart symbol={instrument} height={520} />
+        <TradingViewLiveChart
+          symbol={instrument}
+          height={520}
+          entryPrice={entryPrice}
+          stopLoss={initialSl}
+          takeProfit={targetTp}
+          fvgLow={fvgLow}
+          fvgHigh={fvgHigh}
+          trailedSl={trailedStopLoss}
+          rrRatio={rrRatio}
+          direction={direction}
+        />
       ) : (
         <>
           {/* ── 3. Step Controller Toolbar ── */}
           <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-border overflow-x-auto no-scrollbar gap-2">
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[11px] font-bold text-text-secondary uppercase tracking-wider mr-1">
-            SMC Sequence:
-          </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[11px] font-bold text-text-secondary uppercase tracking-wider mr-1">
+                SMC Sequence:
+              </span>
 
-          <button
-            onClick={() => { setActiveStep("SWEEP"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "SWEEP"
-                ? "bg-amber-500/20 text-amber-500 border-amber-500/50 font-bold"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            1. Sweep Purge
-          </button>
+              <button
+                onClick={() => { setActiveStep("SWEEP"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "SWEEP"
+                    ? "bg-amber-500/20 text-amber-500 border-amber-500/50 font-bold"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                1. Sweep Purge
+              </button>
 
-          {/* User Clarified Cyan Zone */}
-          <button
-            onClick={() => { setActiveStep("FVG"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "FVG"
-                ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50 font-bold shadow-xs"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            2. Mark FVG (Cyan Zone)
-          </button>
+              {/* User Clarified Cyan Zone */}
+              <button
+                onClick={() => { setActiveStep("FVG"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "FVG"
+                    ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50 font-bold shadow-xs"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                2. Mark FVG (Cyan Zone)
+              </button>
 
-          <button
-            onClick={() => { setActiveStep("RETRACEMENT"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "RETRACEMENT"
-                ? "bg-blue-500/20 text-blue-400 border-blue-500/50 font-bold"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            3. Mitigation Tap
-          </button>
+              <button
+                onClick={() => { setActiveStep("RETRACEMENT"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "RETRACEMENT"
+                    ? "bg-blue-500/20 text-blue-400 border-blue-500/50 font-bold"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                3. Mitigation Tap
+              </button>
 
-          <button
-            onClick={() => { setActiveStep("CONFIRMATION"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "CONFIRMATION"
-                ? "bg-amber-400/20 text-amber-500 border-amber-400/50 font-bold animate-pulse"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            4. Wait Confirmation
-          </button>
+              <button
+                onClick={() => { setActiveStep("CONFIRMATION"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "CONFIRMATION"
+                    ? "bg-amber-400/20 text-amber-500 border-amber-400/50 font-bold animate-pulse"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                4. Wait Confirmation
+              </button>
 
-          <button
-            onClick={() => { setActiveStep("EXECUTION"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "EXECUTION"
-                ? "bg-profit/20 text-profit border-profit/50 font-bold"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            5. Execute &amp; Trail
-          </button>
+              <button
+                onClick={() => { setActiveStep("EXECUTION"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "EXECUTION"
+                    ? "bg-profit/20 text-profit border-profit/50 font-bold"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                5. Execute &amp; Trail
+              </button>
 
-          <button
-            onClick={() => { setActiveStep("ALL"); setIsPlayingCycle(false); }}
-            className={cn(
-              "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
-              activeStep === "ALL"
-                ? "bg-accent/20 text-accent border-accent/50 font-bold"
-                : "bg-surface text-text-secondary border-border hover:text-text-primary"
-            )}
-          >
-            View Complete Forecast (Image 1)
-          </button>
-        </div>
+              <button
+                onClick={() => { setActiveStep("ALL"); setIsPlayingCycle(false); }}
+                className={cn(
+                  "px-2.5 py-1 rounded text-[11px] font-semibold border transition-all shrink-0",
+                  activeStep === "ALL"
+                    ? "bg-accent/20 text-accent border-accent/50 font-bold"
+                    : "bg-surface text-text-secondary border-border hover:text-text-primary"
+                )}
+              >
+                View Complete Forecast (Image 1)
+              </button>
+            </div>
 
-        {/* Auto Play Cycle Button */}
-        <button
-          onClick={() => setIsPlayingCycle(!isPlayingCycle)}
-          className={cn(
-            "flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all shrink-0",
-            isPlayingCycle
-              ? "bg-amber-500/20 border-amber-500/40 text-amber-500"
-              : "bg-surface border-border text-text-secondary hover:text-text-primary"
-          )}
-        >
-          {isPlayingCycle ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          <span>{isPlayingCycle ? "Pause Sequence" : "Auto-Play Cycle"}</span>
-        </button>
-      </div>
+            {/* Auto Play Cycle Button */}
+            <button
+              onClick={() => setIsPlayingCycle(!isPlayingCycle)}
+              className={cn(
+                "flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold transition-all shrink-0",
+                isPlayingCycle
+                  ? "bg-amber-500/20 border-amber-500/40 text-amber-500"
+                  : "bg-surface border-border text-text-secondary hover:text-text-primary"
+              )}
+            >
+              {isPlayingCycle ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+              <span>{isPlayingCycle ? "Pause Sequence" : "Auto-Play Cycle"}</span>
+            </button>
+          </div>
 
-      {/* ── 4. Main Chart Stage (Solid High-Contrast Canvas) ── */}
-      <div className="relative bg-[#070A0F] select-none overflow-x-auto">
-        <svg
-          viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          className="w-full h-[390px] min-w-[620px] font-mono text-[10px]"
-        >
-          {/* Background grid lines */}
-          {gridTicks.map((tick, i) => {
-            const y = getY(tick);
-            return (
-              <g key={i}>
-                <line
-                  x1="0"
-                  y1={y}
-                  x2={svgWidth - 75}
-                  y2={y}
-                  stroke="#1B2535"
-                  strokeDasharray="3,3"
-                  strokeWidth="1"
-                />
-                <text
-                  x={svgWidth - 70}
-                  y={y + 3}
-                  fill="#64748B"
-                  fontSize="10"
-                  fontFamily="monospace"
-                >
-                  {formatPrice(tick)}
-                </text>
-              </g>
-            );
-          })}
+          {/* ── 4. Main Chart Stage (Solid High-Contrast Canvas) ── */}
+          <div className="relative bg-[#070A0F] select-none overflow-x-auto">
+            <svg
+              viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+              className="w-full h-[390px] min-w-[620px] font-mono text-[10px]"
+            >
+              {/* Background grid lines */}
+              {gridTicks.map((tick, i) => {
+                const y = getY(tick);
+                return (
+                  <g key={i}>
+                    <line
+                      x1="0"
+                      y1={y}
+                      x2={svgWidth - 75}
+                      y2={y}
+                      stroke="#1B2535"
+                      strokeDasharray="3,3"
+                      strokeWidth="1"
+                    />
+                    <text
+                      x={svgWidth - 70}
+                      y={y + 3}
+                      fill="#64748B"
+                      fontSize="10"
+                      fontFamily="monospace"
+                    >
+                      {formatPrice(tick)}
+                    </text>
+                  </g>
+                );
+              })}
 
-          {/* Vertical Time Grid & Future Projection Line */}
-          <line
-            x1="410"
-            y1="0"
-            x2="410"
-            y2={svgHeight - 20}
-            stroke="#64748B"
-            strokeDasharray="4,4"
-            strokeWidth="1.2"
-            opacity="0.6"
-          />
-
-          {/* ── 1. Liquidity Sweep Indicator (Step 1) ── */}
-          {(activeStep === "ALL" || activeStep === "SWEEP") && (
-            <g>
+              {/* Vertical Time Grid & Future Projection Line */}
               <line
-                x1="40"
-                y1={getY(sweepLevel)}
-                x2="350"
-                y2={getY(sweepLevel)}
-                stroke="#F59E0B"
-                strokeWidth="1.5"
-                strokeDasharray="4,2"
+                x1="410"
+                y1="0"
+                x2="410"
+                y2={svgHeight - 20}
+                stroke="#64748B"
+                strokeDasharray="4,4"
+                strokeWidth="1.2"
+                opacity="0.6"
               />
-              <rect
-                x="45"
-                y={getY(sweepLevel) - 16}
-                width="200"
-                height="15"
-                fill="rgba(245, 158, 11, 0.15)"
-                stroke="#F59E0B"
-                strokeWidth="1"
-                rx="2"
-              />
-              <text
-                x="50"
-                y={getY(sweepLevel) - 5}
-                fill="#FBBF24"
-                fontSize="8.5"
-                fontWeight="bold"
-              >
-                SWEEP: BUY-SIDE LIQUIDITY (BSL) PURGED
-              </text>
-            </g>
-          )}
 
-          {/* ── 2. The Fair Value Gap (FVG) Imbalance Box (Cyan Zone as Requested) ── */}
-          {(activeStep === "ALL" || activeStep === "FVG" || activeStep === "RETRACEMENT" || activeStep === "CONFIRMATION" || activeStep === "EXECUTION") && (
-            <g>
-              {/* Cyan FVG Zone Marked Out on Chart */}
-              <rect
-                x="80"
-                y={getY(fvgHigh)}
-                width="310"
-                height={Math.max(12, getY(fvgLow) - getY(fvgHigh))}
-                fill="rgba(6, 182, 212, 0.22)"
-                stroke="#00F0FF"
-                strokeWidth="1.8"
-                rx="3"
-              />
-              <text
-                x="85"
-                y={getY(fvgHigh) - 6}
-                fill="#22D3EE"
-                fontSize="9"
-                fontWeight="bold"
-              >
-                H1 FAIR VALUE GAP (CYAN MARKED ZONE) · {fvgPoints} PTS ({fvgPips} PIPS)
-              </text>
-
-              {/* 50% Consequent Encroachment (C.E.) Line */}
-              <line
-                x1="80"
-                y1={getY(ceLevel)}
-                x2="390"
-                y2={getY(ceLevel)}
-                stroke="#22D3EE"
-                strokeDasharray="4,3"
-                strokeWidth="1.4"
-              />
-              <text
-                x="290"
-                y={getY(ceLevel) - 4}
-                fill="#A5F3FC"
-                fontSize="8"
-                fontWeight="bold"
-              >
-                50% C.E. {formatPrice(ceLevel)}
-              </text>
-            </g>
-          )}
-
-          {/* ── 3. Reference Candle Breakout Trigger Level (Step 4) ── */}
-          {(activeStep === "ALL" || activeStep === "CONFIRMATION" || activeStep === "EXECUTION") && (
-            <g>
-              <line
-                x1="140"
-                y1={getY(triggerLevel)}
-                x2="390"
-                y2={getY(triggerLevel)}
-                stroke="#38BDF8"
-                strokeDasharray="5,2"
-                strokeWidth="1.5"
-              />
-              <rect
-                x="145"
-                y={getY(triggerLevel) + 4}
-                width="210"
-                height="16"
-                fill="rgba(2, 132, 199, 0.25)"
-                stroke="#38BDF8"
-                strokeWidth="1"
-                rx="2"
-              />
-              <text
-                x="150"
-                y={getY(triggerLevel) + 16}
-                fill="#38BDF8"
-                fontSize="8.5"
-                fontWeight="bold"
-              >
-                TRIGGER: 1-TICK BREAKOUT LEVEL ({formatPrice(triggerLevel)})
-              </text>
-            </g>
-          )}
-
-          {/* ── 4. The Forecasting Tool (Risk/Reward Box) ── */}
-          {(activeStep === "ALL" || activeStep === "EXECUTION") && (
-            <>
-              {/* STOP LOSS ZONE (Red Shaded Box on Top) */}
-              <g>
-                <rect
-                  x="185"
-                  y={getY(initialSl)}
-                  width="225"
-                  height={Math.max(4, getY(entryPrice) - getY(initialSl))}
-                  fill="rgba(239, 68, 68, 0.35)"
-                  stroke="#EF4444"
-                  strokeWidth="1.2"
-                />
-                <rect
-                  x={svgWidth - 75}
-                  y={getY(initialSl) - 8}
-                  width="72"
-                  height="16"
-                  fill="#EF4444"
-                  rx="2"
-                />
-                <text
-                  x={svgWidth - 70}
-                  y={getY(initialSl) + 4}
-                  fill="#FFFFFF"
-                  fontSize="9"
-                  fontWeight="bold"
-                >
-                  SL {formatPrice(initialSl)}
-                </text>
-              </g>
-
-              {/* TAKE PROFIT ZONE (Green Shaded Box on Bottom) */}
-              <g>
-                <rect
-                  x="185"
-                  y={getY(entryPrice)}
-                  width="225"
-                  height={Math.max(4, getY(targetTp) - getY(entryPrice))}
-                  fill="rgba(16, 185, 129, 0.30)"
-                  stroke="#10B981"
-                  strokeWidth="1.2"
-                />
-                <rect
-                  x={svgWidth - 75}
-                  y={getY(targetTp) - 8}
-                  width="72"
-                  height="16"
-                  fill="#10B981"
-                  rx="2"
-                />
-                <text
-                  x={svgWidth - 70}
-                  y={getY(targetTp) + 4}
-                  fill="#FFFFFF"
-                  fontSize="9"
-                  fontWeight="bold"
-                >
-                  TP {formatPrice(targetTp)}
-                </text>
-              </g>
-
-              {/* ENTRY LINE */}
-              <line
-                x1="185"
-                y1={getY(entryPrice)}
-                x2={svgWidth - 75}
-                y2={getY(entryPrice)}
-                stroke="#38BDF8"
-                strokeWidth="1.8"
-              />
-              <rect
-                x={svgWidth - 75}
-                y={getY(entryPrice) - 8}
-                width="72"
-                height="16"
-                fill="#0284C7"
-                rx="2"
-              />
-              <text
-                x={svgWidth - 70}
-                y={getY(entryPrice) + 4}
-                fill="#FFFFFF"
-                fontSize="9"
-                fontWeight="bold"
-              >
-                ENTRY {formatPrice(entryPrice)}
-              </text>
-
-              {/* DYNAMIC TRAILING STOP LINE */}
-              {trailedStopLoss !== initialSl && (
+              {/* ── 1. Liquidity Sweep Indicator (Step 1) ── */}
+              {(activeStep === "ALL" || activeStep === "SWEEP") && (
                 <g>
                   <line
-                    x1="185"
-                    y1={getY(trailedStopLoss)}
-                    x2={svgWidth - 75}
-                    y2={getY(trailedStopLoss)}
+                    x1="40"
+                    y1={getY(sweepLevel)}
+                    x2="350"
+                    y2={getY(sweepLevel)}
                     stroke="#F59E0B"
-                    strokeWidth="2"
-                    strokeDasharray="5,3"
+                    strokeWidth="1.5"
+                    strokeDasharray="4,2"
                   />
                   <rect
-                    x={svgWidth - 75}
-                    y={getY(trailedStopLoss) - 8}
-                    width="72"
-                    height="16"
-                    fill="#F59E0B"
+                    x="45"
+                    y={getY(sweepLevel) - 16}
+                    width="200"
+                    height="15"
+                    fill="rgba(245, 158, 11, 0.15)"
+                    stroke="#F59E0B"
+                    strokeWidth="1"
                     rx="2"
                   />
                   <text
-                    x={svgWidth - 70}
-                    y={getY(trailedStopLoss) + 4}
-                    fill="#000000"
-                    fontSize="9"
-                    fontWeight="extrabold"
+                    x="50"
+                    y={getY(sweepLevel) - 5}
+                    fill="#FBBF24"
+                    fontSize="8.5"
+                    fontWeight="bold"
                   >
-                    TRAILED {formatPrice(trailedStopLoss)}
+                    SWEEP: BUY-SIDE LIQUIDITY (BSL) PURGED
                   </text>
                 </g>
               )}
 
-              {/* Tool label badge */}
-              <g>
-                <rect
-                  x="195"
-                  y={getY(entryPrice) + 8}
-                  width="170"
-                  height="22"
-                  fill="rgba(7, 10, 15, 0.95)"
-                  stroke="#38BDF8"
-                  strokeWidth="1"
-                  rx="4"
-                />
-                <text
-                  x="202"
-                  y={getY(entryPrice) + 23}
-                  fill="#38BDF8"
-                  fontSize="9"
-                  fontWeight="bold"
-                >
-                  R:R 1:{rrRatio.toFixed(2)} · TARGET +{rewardPoints} PTS ({rewardPips} PIPS)
-                </text>
-              </g>
-            </>
-          )}
+              {/* ── 2. The Fair Value Gap (FVG) Imbalance Box (Cyan Zone as Requested) ── */}
+              {(activeStep === "ALL" || activeStep === "FVG" || activeStep === "RETRACEMENT" || activeStep === "CONFIRMATION" || activeStep === "EXECUTION") && (
+                <g>
+                  {/* Cyan FVG Zone Marked Out on Chart */}
+                  <rect
+                    x="80"
+                    y={getY(fvgHigh)}
+                    width="310"
+                    height={Math.max(12, getY(fvgLow) - getY(fvgHigh))}
+                    fill="rgba(6, 182, 212, 0.22)"
+                    stroke="#00F0FF"
+                    strokeWidth="1.8"
+                    rx="3"
+                  />
+                  <text
+                    x="85"
+                    y={getY(fvgHigh) - 6}
+                    fill="#22D3EE"
+                    fontSize="9"
+                    fontWeight="bold"
+                  >
+                    H1 FAIR VALUE GAP (CYAN MARKED ZONE) · {fvgPoints} PTS ({fvgPips} PIPS)
+                  </text>
 
-          {/* ── 5. Candlesticks ── */}
-          {candles.map((c, i) => {
-            const x = 30 + i * 36;
-            const openY = getY(c.open);
-            const closeY = getY(c.close);
-            const highY = getY(c.high);
-            const lowY = getY(c.low);
-            const isBull = c.close >= c.open;
-            const candleTop = Math.min(openY, closeY);
-            const candleHeight = Math.max(3, Math.abs(closeY - openY));
+                  {/* 50% Consequent Encroachment (C.E.) Line */}
+                  <line
+                    x1="80"
+                    y1={getY(ceLevel)}
+                    x2="390"
+                    y2={getY(ceLevel)}
+                    stroke="#22D3EE"
+                    strokeDasharray="4,3"
+                    strokeWidth="1.4"
+                  />
+                  <text
+                    x="290"
+                    y={getY(ceLevel) - 4}
+                    fill="#A5F3FC"
+                    fontSize="8"
+                    fontWeight="bold"
+                  >
+                    50% C.E. {formatPrice(ceLevel)}
+                  </text>
+                </g>
+              )}
 
-            return (
-              <g key={i}>
-                {/* Wick */}
-                <line
-                  x1={x}
-                  y1={highY}
-                  x2={x}
-                  y2={lowY}
-                  stroke={isBull ? "#10B981" : "#EF4444"}
-                  strokeWidth="1.5"
-                />
-                {/* Body */}
-                <rect
-                  x={x - 6}
-                  y={candleTop}
-                  width="12"
-                  height={candleHeight}
-                  fill={isBull ? "#10B981" : "#EF4444"}
-                  stroke={isBull ? "#059669" : "#DC2626"}
-                  strokeWidth="1"
-                  rx="1"
-                />
-              </g>
-            );
-          })}
+              {/* ── 3. Reference Candle Breakout Trigger Level (Step 4) ── */}
+              {(activeStep === "ALL" || activeStep === "CONFIRMATION" || activeStep === "EXECUTION") && (
+                <g>
+                  <line
+                    x1="140"
+                    y1={getY(triggerLevel)}
+                    x2="390"
+                    y2={getY(triggerLevel)}
+                    stroke="#38BDF8"
+                    strokeDasharray="5,2"
+                    strokeWidth="1.5"
+                  />
+                  <rect
+                    x="145"
+                    y={getY(triggerLevel) + 4}
+                    width="210"
+                    height="16"
+                    fill="rgba(2, 132, 199, 0.25)"
+                    stroke="#38BDF8"
+                    strokeWidth="1"
+                    rx="2"
+                  />
+                  <text
+                    x="150"
+                    y={getY(triggerLevel) + 16}
+                    fill="#38BDF8"
+                    fontSize="8.5"
+                    fontWeight="bold"
+                  >
+                    TRIGGER: 1-TICK BREAKOUT LEVEL ({formatPrice(triggerLevel)})
+                  </text>
+                </g>
+              )}
 
-          {/* Current Live Price Line */}
-          <line
-            x1="0"
-            y1={getY(currentPrice)}
-            x2={svgWidth - 75}
-            y2={getY(currentPrice)}
-            stroke="#EAB308"
-            strokeWidth="1.2"
-            strokeDasharray="2,2"
-          />
-          <circle
-            cx={svgWidth - 85}
-            cy={getY(currentPrice)}
-            r="4"
-            fill="#EAB308"
-            className="animate-ping"
-          />
-          <circle
-            cx={svgWidth - 85}
-            cy={getY(currentPrice)}
-            r="3"
-            fill="#EAB308"
-          />
-        </svg>
+              {/* ── 4. The Forecasting Tool (Risk/Reward Box) ── */}
+              {(activeStep === "ALL" || activeStep === "EXECUTION") && (
+                <>
+                  {/* STOP LOSS ZONE (Red Shaded Box on Top) */}
+                  <g>
+                    <rect
+                      x="185"
+                      y={getY(initialSl)}
+                      width="225"
+                      height={Math.max(4, getY(entryPrice) - getY(initialSl))}
+                      fill="rgba(239, 68, 68, 0.35)"
+                      stroke="#EF4444"
+                      strokeWidth="1.2"
+                    />
+                    <rect
+                      x={svgWidth - 75}
+                      y={getY(initialSl) - 8}
+                      width="72"
+                      height="16"
+                      fill="#EF4444"
+                      rx="2"
+                    />
+                    <text
+                      x={svgWidth - 70}
+                      y={getY(initialSl) + 4}
+                      fill="#FFFFFF"
+                      fontSize="9"
+                      fontWeight="bold"
+                    >
+                      SL {formatPrice(initialSl)}
+                    </text>
+                  </g>
 
-        {/* Live Terminal Price Tag on Top-Right of Chart */}
-        <div className="absolute top-3 right-3 bg-[#0B101B] border border-[#1E2D40] px-3 py-1.5 rounded text-right font-mono">
-          <span className="text-[10px] text-text-secondary block">LIVE BID ({instrument})</span>
-          <span className="text-sm font-black text-amber-400">
-            {formatPrice(currentPriceAnchor)}
-          </span>
-          <span className="text-[9px] text-emerald-400 block mt-0.5">
-            Spread: {liveSpread} pts · 0 Slippage
-          </span>
-        </div>
-      </div>
+                  {/* TAKE PROFIT ZONE (Green Shaded Box on Bottom) */}
+                  <g>
+                    <rect
+                      x="185"
+                      y={getY(entryPrice)}
+                      width="225"
+                      height={Math.max(4, getY(targetTp) - getY(entryPrice))}
+                      fill="rgba(16, 185, 129, 0.30)"
+                      stroke="#10B981"
+                      strokeWidth="1.2"
+                    />
+                    <rect
+                      x={svgWidth - 75}
+                      y={getY(targetTp) - 8}
+                      width="72"
+                      height="16"
+                      fill="#10B981"
+                      rx="2"
+                    />
+                    <text
+                      x={svgWidth - 70}
+                      y={getY(targetTp) + 4}
+                      fill="#FFFFFF"
+                      fontSize="9"
+                      fontWeight="bold"
+                    >
+                      TP {formatPrice(targetTp)}
+                    </text>
+                  </g>
+
+                  {/* ENTRY LINE */}
+                  <line
+                    x1="185"
+                    y1={getY(entryPrice)}
+                    x2={svgWidth - 75}
+                    y2={getY(entryPrice)}
+                    stroke="#38BDF8"
+                    strokeWidth="1.8"
+                  />
+                  <rect
+                    x={svgWidth - 75}
+                    y={getY(entryPrice) - 8}
+                    width="72"
+                    height="16"
+                    fill="#0284C7"
+                    rx="2"
+                  />
+                  <text
+                    x={svgWidth - 70}
+                    y={getY(entryPrice) + 4}
+                    fill="#FFFFFF"
+                    fontSize="9"
+                    fontWeight="bold"
+                  >
+                    ENTRY {formatPrice(entryPrice)}
+                  </text>
+
+                  {/* DYNAMIC TRAILING STOP LINE */}
+                  {trailedStopLoss !== initialSl && (
+                    <g>
+                      <line
+                        x1="185"
+                        y1={getY(trailedStopLoss)}
+                        x2={svgWidth - 75}
+                        y2={getY(trailedStopLoss)}
+                        stroke="#F59E0B"
+                        strokeWidth="2"
+                        strokeDasharray="5,3"
+                      />
+                      <rect
+                        x={svgWidth - 75}
+                        y={getY(trailedStopLoss) - 8}
+                        width="72"
+                        height="16"
+                        fill="#F59E0B"
+                        rx="2"
+                      />
+                      <text
+                        x={svgWidth - 70}
+                        y={getY(trailedStopLoss) + 4}
+                        fill="#000000"
+                        fontSize="9"
+                        fontWeight="extrabold"
+                      >
+                        TRAILED {formatPrice(trailedStopLoss)}
+                      </text>
+                    </g>
+                  )}
+
+                  {/* Tool label badge */}
+                  <g>
+                    <rect
+                      x="195"
+                      y={getY(entryPrice) + 8}
+                      width="170"
+                      height="22"
+                      fill="rgba(7, 10, 15, 0.95)"
+                      stroke="#38BDF8"
+                      strokeWidth="1"
+                      rx="4"
+                    />
+                    <text
+                      x="202"
+                      y={getY(entryPrice) + 23}
+                      fill="#38BDF8"
+                      fontSize="9"
+                      fontWeight="bold"
+                    >
+                      R:R 1:{rrRatio.toFixed(2)} · TARGET +{rewardPoints} PTS ({rewardPips} PIPS)
+                    </text>
+                  </g>
+                </>
+              )}
+
+              {/* ── 5. Candlesticks ── */}
+              {candles.map((c, i) => {
+                const x = 30 + i * 36;
+                const openY = getY(c.open);
+                const closeY = getY(c.close);
+                const highY = getY(c.high);
+                const lowY = getY(c.low);
+                const isBull = c.close >= c.open;
+                const candleTop = Math.min(openY, closeY);
+                const candleHeight = Math.max(3, Math.abs(closeY - openY));
+
+                return (
+                  <g key={i}>
+                    {/* Wick */}
+                    <line
+                      x1={x}
+                      y1={highY}
+                      x2={x}
+                      y2={lowY}
+                      stroke={isBull ? "#10B981" : "#EF4444"}
+                      strokeWidth="1.5"
+                    />
+                    {/* Body */}
+                    <rect
+                      x={x - 6}
+                      y={candleTop}
+                      width="12"
+                      height={candleHeight}
+                      fill={isBull ? "#10B981" : "#EF4444"}
+                      stroke={isBull ? "#059669" : "#DC2626"}
+                      strokeWidth="1"
+                      rx="1"
+                    />
+                  </g>
+                );
+              })}
+
+              {/* Current Live Price Line */}
+              <line
+                x1="0"
+                y1={getY(currentPrice)}
+                x2={svgWidth - 75}
+                y2={getY(currentPrice)}
+                stroke="#EAB308"
+                strokeWidth="1.2"
+                strokeDasharray="2,2"
+              />
+              <circle
+                cx={svgWidth - 85}
+                cy={getY(currentPrice)}
+                r="4"
+                fill="#EAB308"
+                className="animate-ping"
+              />
+              <circle
+                cx={svgWidth - 85}
+                cy={getY(currentPrice)}
+                r="3"
+                fill="#EAB308"
+              />
+            </svg>
+
+            {/* Live Terminal Price Tag on Top-Right of Chart */}
+            <div className="absolute top-3 right-3 bg-[#0B101B] border border-[#1E2D40] px-3 py-1.5 rounded text-right font-mono">
+              <span className="text-[10px] text-text-secondary block">LIVE BID ({instrument})</span>
+              <span className="text-sm font-black text-amber-400">
+                {formatPrice(currentPriceAnchor)}
+              </span>
+              <span className="text-[9px] text-emerald-400 block mt-0.5">
+                Spread: {liveSpread} pts · 0 Slippage
+              </span>
+            </div>
+          </div>
         </>
       )}
 
       {/* ── 5. Bottom Analytical Tabs (Solid Institutional Navigation) ── */}
       <div className="border-t border-border bg-surface transition-colors">
         <div className="flex border-b border-border px-4 overflow-x-auto no-scrollbar">
+          <button
+            onClick={() => setActiveTab("forecast")}
+            className={cn(
+              "px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 shrink-0",
+              activeTab === "forecast"
+                ? "border-accent text-accent bg-accent/5"
+                : "border-transparent text-text-secondary hover:text-text-primary"
+            )}
+          >
+            <Compass className="w-4 h-4 text-accent" />
+            <span>Forecasting Tool &amp; 1:3 RR Measuring Box</span>
+          </button>
+
           <button
             onClick={() => setActiveTab("calculator")}
             className={cn(
@@ -1135,6 +1160,24 @@ export function InteractiveForecastChart({
             <span>Dynamic Trailing &amp; Market Simulation</span>
           </button>
         </div>
+
+        {/* ── TAB FORECAST: FVG MEASURING & FORECAST TOOL (1:3 RR) ── */}
+        {activeTab === "forecast" && (
+          <div className="p-4">
+            <FvgForecastTool
+              instrument={instrument}
+              direction={direction === "SHORT" ? "BEARISH" : "BULLISH"}
+              entryPrice={entryPrice}
+              slPrice={initialSl}
+              tpPrice={targetTp}
+              fvgHigh={fvgHigh}
+              fvgLow={fvgLow}
+              triggerLevel={triggerLevel}
+              sweepExtreme={sweepExtreme}
+              accountBalance={effectiveBalance}
+            />
+          </div>
+        )}
 
         {/* ── TAB 0: PRE-TRADE RISK & SIZING CALCULATOR ($50+ COMPOUNDING) ── */}
         {activeTab === "calculator" && (
@@ -1308,7 +1351,7 @@ export function InteractiveForecastChart({
                   +${actualRewardUsd.toFixed(2)} USD
                 </span>
                 <span className="text-[10px] text-profit block font-mono font-semibold">
-                  +{( (actualRewardUsd / effectiveBalance) * 100 ).toFixed(1)}% account expansion
+                  +{((actualRewardUsd / effectiveBalance) * 100).toFixed(1)}% account expansion
                 </span>
               </div>
             </div>
@@ -1325,7 +1368,7 @@ export function InteractiveForecastChart({
                 </span>
               </div>
               <p className="text-[11px] text-text-secondary leading-relaxed">
-                Even with an account as low as <strong>$50.00</strong>, the engine calculates the exact lot size (<strong>{calculatedLotSize.toFixed(2)} lots</strong>) so your downside on a full stop loss hit is capped to <strong>${actualRiskUsd.toFixed(2)}</strong>. Because the setup enforces a strict <strong>1:{rrRatio.toFixed(1)} R:R</strong>, each successful hit expands your capital by <strong>+${actualRewardUsd.toFixed(2)} (+{((actualRewardUsd / effectiveBalance)*100).toFixed(1)}%)</strong>!
+                Even with an account as low as <strong>$50.00</strong>, the engine calculates the exact lot size (<strong>{calculatedLotSize.toFixed(2)} lots</strong>) so your downside on a full stop loss hit is capped to <strong>${actualRiskUsd.toFixed(2)}</strong>. Because the setup enforces a strict <strong>1:{rrRatio.toFixed(1)} R:R</strong>, each successful hit expands your capital by <strong>+${actualRewardUsd.toFixed(2)} (+{((actualRewardUsd / effectiveBalance) * 100).toFixed(1)}%)</strong>!
               </p>
 
               {/* Micro-Compounding Table */}

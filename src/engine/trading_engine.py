@@ -40,9 +40,13 @@ from src.strategy.strategy_core import (
     FVGDetector, SwingDetector, LiquiditySweepDetector,
     ReferenceCandleSelector, GapExitChecker, EntryTriggerChecker,
     StopLossCalculator, TakeProfitCalculator, SetupExpiryChecker,
+    BreakEvenTrailingManager, StopUpdateResult,
     FVG, LiquiditySweep, ReferenceCandle, Swing,
     SPEC_VERSION, SPEC_HASH_PLACEHOLDER,
 )
+from src.strategy.market_clarity import MarketClarityEngine, _detect_h4_trend
+from src.strategy.structural_tp import StructuralTPDetector
+from src.execution.two_position_executor import TwoPositionPlanner
 from src.utils.ids import order_client_id
 from src.utils.logging_config import get_logger
 
@@ -140,6 +144,7 @@ class TradingEngine:
         self._fvg_detectors: dict[str, FVGDetector] = {}
         self._swing_detectors: dict[str, SwingDetector] = {}
         self._gap_exit_checkers: dict[str, GapExitChecker] = {}
+        self._tp_detectors: dict[str, StructuralTPDetector] = {}
 
         self._sweep_detector = LiquiditySweepDetector()
         self._expiry_checker = SetupExpiryChecker(
@@ -149,6 +154,28 @@ class TradingEngine:
         self._risk_engine = RiskEngine(
             settings=r,
             account_label=settings.execution_mode,
+        )
+        self._clarity_engine = MarketClarityEngine(
+            clarity_reject_below=s.clarity_reject_below,
+            clarity_one_position=s.clarity_one_position,
+            clarity_two_positions=s.clarity_two_positions,
+            clarity_high_confluence=s.clarity_high_confluence,
+            grade_a_min_score=s.grade_a_min_score,
+            grade_b_min_score=s.grade_b_min_score,
+            grade_a_risk_pct=s.grade_a_risk_pct,
+            grade_b_risk_pct=s.grade_b_risk_pct,
+            grade_a_risk_pct_max=s.grade_a_risk_pct_max,
+            displacement_body_pct=s.displacement_body_pct,
+            tp1_min_rr=s.tp1_min_rr,
+            h4_trend_filter_enabled=s.h4_trend_filter_enabled,
+            atr_period=s.atr_period,
+        )
+        self._two_pos_planner = TwoPositionPlanner(
+            tp1_min_rr=s.tp1_min_rr,
+            tp2_min_rr=s.tp2_min_rr,
+            tp2_min_atr_distance=s.tp2_min_atr_distance,
+            two_position_mode_enabled=s.two_position_mode_enabled,
+            partial_execution_policy=s.partial_execution_policy,
         )
 
     # ── Public ────────────────────────────────────────────────────────────────
@@ -178,6 +205,15 @@ class TradingEngine:
                 )
                 self._gap_exit_checkers[base_symbol] = GapExitChecker(
                     mode=s.gap_exit_mode,
+                )
+                self._tp_detectors[base_symbol] = StructuralTPDetector(
+                    tp1_min_rr=s.tp1_min_rr,
+                    tp2_min_rr=s.tp2_min_rr,
+                    tp2_min_atr_distance=s.tp2_min_atr_distance,
+                    tick_size=info.tick_size,
+                    atr_period=s.atr_period,
+                    pivot_left_bars=s.pivot_left_bars,
+                    pivot_right_bars=s.pivot_right_bars,
                 )
                 log.info("symbol_initialised", symbol=base_symbol,
                          digits=info.digits, tick_size=info.tick_size,
@@ -268,6 +304,26 @@ class TradingEngine:
                 )
                 if advanced:
                     result.setups_advanced += 1
+
+            # ── 5. Break-even + trailing for open positions (R89–R96) ─────────
+            open_orders = (
+                db.query(Order)
+                .filter(
+                    Order.symbol == symbol,
+                    Order.status == "FILLED",
+                )
+                .all()
+            )
+            for order in open_orders:
+                if order.filled_price is None:
+                    continue
+                self._evaluate_be_trail(
+                    order=order,
+                    candles=candles,
+                    info=info,
+                    now=now,
+                    db=db,
+                )
 
         finally:
             db.close()
@@ -426,6 +482,68 @@ class TradingEngine:
                     result.orders_rejected += 1
                     return True
 
+                # ── Structural TP & Market Clarity Evaluation (v1.2 R97–R104) ──
+                tp_det = self._tp_detectors.get(symbol)
+                tp_struct_res = (
+                    tp_det.detect(fvg.direction, entry_price, sl, candles)
+                    if tp_det else None
+                )
+                if tp_struct_res and tp_struct_res.tp1 is not None:
+                    setup.tp1_structural = tp_struct_res.tp1.price
+                    setup.tp1_rr_ratio = tp_struct_res.tp1.rr_ratio
+                else:
+                    setup.tp1_structural = tp
+                    setup.tp1_rr_ratio = rr
+
+                if tp_struct_res and tp_struct_res.tp2 is not None:
+                    setup.tp2_structural = tp_struct_res.tp2.price
+                    setup.tp2_rr_ratio = tp_struct_res.tp2.rr_ratio
+
+                try:
+                    h4_candles = self._market_data.get_candles(symbol, "H4", 50)
+                except Exception:
+                    h4_candles = candles
+                if not h4_candles:
+                    h4_candles = candles
+
+                setup.h4_trend = _detect_h4_trend(
+                    h4_candles,
+                    left_bars=s.pivot_left_bars,
+                    right_bars=s.pivot_right_bars,
+                )
+
+                spread_pips = (
+                    (tick["ask"] - tick["bid"]) / (info.point or 0.01)
+                    if tick else 1.0
+                )
+                max_spread = r.max_spread_pips.get(symbol) or 50.0
+                clarity = self._clarity_engine.evaluate(
+                    fvg=fvg,
+                    sweep=sweep,
+                    ref_candle=ref,
+                    trigger_fired=True,
+                    entry_price=entry_price,
+                    sl_price=sl,
+                    tp1_price=setup.tp1_structural or tp,
+                    h1_candles=candles,
+                    h4_candles=h4_candles,
+                    current_spread_pips=spread_pips,
+                    max_spread_pips=max_spread,
+                )
+                setup.clarity_score = clarity.score
+                setup.clarity_grade = clarity.grade
+                setup.positions_permitted = clarity.positions_permitted
+                setup.clarity_components_json = json.dumps([
+                    {
+                        "id": c.component_id,
+                        "points": c.points_awarded,
+                        "max": c.points_max,
+                        "passed": c.passed,
+                        "reason": c.reason,
+                    }
+                    for c in clarity.components
+                ])
+
                 # Sizing
                 sizing = self._risk_engine.calculate_size(
                     symbol_info=info,
@@ -540,6 +658,12 @@ class TradingEngine:
                         is_paper=is_paper_exec,
                         sl_confirmed_by_broker=True,
                         status="FILLED",
+                        # Break-even / trailing initialisation (R89–R96, spec v1.1)
+                        original_sl=setup.proposed_sl,
+                        current_sl=setup.proposed_sl,
+                        breakeven_fired=False,
+                        trailing_active=False,
+                        best_close_since_entry=None,
                         spec_version=SPEC_VERSION,
                         spec_hash=self._spec_hash,
                     )
@@ -643,11 +767,17 @@ class TradingEngine:
             hi = extreme
             lo = min(extreme - 0.01, setup.sweep_level - 0.01)
 
-        mid = (lo + hi) / 2
+        rng = max(hi - lo, 0.01)
+        if direction == "BULLISH":
+            op = lo + 0.15 * rng
+            cl = hi - 0.15 * rng
+        else:
+            op = hi - 0.15 * rng
+            cl = lo + 0.15 * rng
         sweep_ts = self._ensure_utc(setup.sweep_candle_time)
         dummy_candle = Candle(
             time=sweep_ts,
-            open=mid, high=hi, low=lo, close=mid,
+            open=op, high=hi, low=lo, close=cl,
             volume=0.0,
             symbol=setup.symbol,
             timeframe=setup.timeframe,
@@ -766,3 +896,197 @@ class TradingEngine:
         )
         db.add(log_row)
         db.commit()
+
+    def _evaluate_be_trail(
+        self,
+        order: Order,
+        candles: list[Candle],
+        info: SymbolInfo,
+        now: datetime,
+        db: Session,
+    ) -> None:
+        """
+        Evaluate break-even and ATR trailing stop for a filled open position.
+
+        Called once per completed H1 candle (R94).
+        Handles the full sequence:
+          1. Build the manager with current settings
+          2. Evaluate against the latest candle close
+          3. If an update is needed, submit to paper ledger or MT5
+          4. Verify confirmation and persist the new SL
+          5. Log every decision regardless of outcome
+
+        R89–R96 (spec v1.1)
+        """
+        r = self._settings.risk
+        s = self._settings.strategy
+
+        entry_price    = order.filled_price
+        tp_price       = order.requested_tp
+        current_sl     = order.current_sl if order.current_sl is not None else order.requested_sl
+        original_sl    = order.original_sl if order.original_sl is not None else order.requested_sl
+        direction      = order.direction
+        breakeven_fired = order.breakeven_fired
+        best_close     = order.best_close_since_entry
+
+        if entry_price is None or tp_price is None or current_sl is None:
+            log.warning(
+                "be_trail_skipped_missing_fields",
+                order_id=order.id,
+                entry=entry_price, tp=tp_price, sl=current_sl,
+            )
+            return
+
+        # Must have at least one completed candle
+        if not candles:
+            return
+        close_price = candles[-1].close
+
+        # Build the manager
+        manager = BreakEvenTrailingManager(
+            breakeven_trigger_pct=r.breakeven_trigger_pct,
+            trailing_atr_factor=r.trailing_atr_factor,
+            atr_period=s.atr_period,
+            tick_size=info.tick_size,
+            trade_stops_level=info.trade_stops_level,
+            point=info.point,
+        )
+
+        # Evaluate (R89–R93, R94 — candle close only)
+        result: StopUpdateResult = manager.evaluate(
+            direction=direction,
+            entry_price=entry_price,
+            original_sl=original_sl,
+            tp_price=tp_price,
+            current_sl=current_sl,
+            breakeven_fired=breakeven_fired,
+            best_close_since_entry=best_close,
+            candles=candles,
+            close_price=close_price,
+        )
+
+        # Update best_close in DB regardless of whether SL moved (R93 tracking)
+        new_best = BreakEvenTrailingManager.update_best_close(
+            direction, best_close, close_price
+        )
+        if new_best != best_close:
+            order.best_close_since_entry = new_best
+
+        log.debug(
+            "be_trail_evaluated",
+            order_id=order.id,
+            direction=direction,
+            should_update=result.should_update,
+            reason=result.reason,
+        )
+
+        if not result.should_update or result.new_sl is None:
+            db.commit()
+            return
+
+        new_sl = result.new_sl
+        old_sl = current_sl
+
+        # ── Submit stop modification ─────────────────────────────────────────
+        confirmed = False
+        if self._settings.execution_mode == "paper":
+            # Paper mode: modify the paper ledger directly (R91, R95 — always confirmed)
+            if hasattr(self._executor, "ledger"):
+                for pos in self._executor.ledger.open_positions:
+                    if pos.setup_id == order.setup_id:
+                        pos.sl = new_sl
+                        break
+            confirmed = True
+            log.info(
+                "be_trail_applied_paper",
+                order_id=order.id,
+                old_sl=old_sl, new_sl=new_sl,
+                is_breakeven=result.is_breakeven,
+                is_trailing=result.is_trailing,
+            )
+        else:
+            # Demo mode: submit SL modification to MT5 and verify (R91, R95)
+            if hasattr(self._executor, "modify_position_sl") and order.broker_ticket is not None:
+                confirmed, mod_msg = self._executor.modify_position_sl(
+                    ticket=order.broker_ticket,
+                    new_sl=new_sl,
+                    new_tp=order.requested_tp,
+                )
+                if confirmed and self._copier and hasattr(self._copier, "sync_sl_modification"):
+                    try:
+                        self._copier.sync_sl_modification(order.broker_ticket, new_sl)
+                    except Exception as cop_exc:
+                        log.warning("copier_sl_sync_failed", ticket=order.broker_ticket, error=str(cop_exc))
+                log.info(
+                    "be_trail_applied_demo",
+                    order_id=order.id,
+                    ticket=order.broker_ticket,
+                    old_sl=old_sl,
+                    new_sl=new_sl,
+                    confirmed=confirmed,
+                    message=mod_msg,
+                )
+            else:
+                log.warning(
+                    "be_trail_demo_executor_missing_ticket",
+                    order_id=order.id,
+                    new_sl=new_sl,
+                )
+                confirmed = False
+
+        if not confirmed:
+            log.error(
+                "be_trail_sl_not_confirmed",
+                order_id=order.id,
+                new_sl=new_sl,
+                message=(
+                    "BREAK-EVEN/TRAILING STOP NOT CONFIRMED — "
+                    f"position still protected at {old_sl:.5f}"
+                ),
+            )
+            db.commit()
+            return
+
+        # ── Persist confirmed stop update ────────────────────────────────────
+        order.current_sl = new_sl
+
+        if result.is_breakeven:
+            order.breakeven_fired    = True
+            order.breakeven_fired_at = now
+            order.trailing_active    = True   # trailing activates after BE (R92)
+
+        if result.is_trailing:
+            order.last_trailing_sl         = new_sl
+            order.last_trailing_updated_at = now
+
+        # Persist original SL on first update
+        if order.original_sl is None:
+            order.original_sl = old_sl
+
+        db.add(order)
+        db.commit()
+
+        # ── Journal entry ────────────────────────────────────────────────────
+        event = "BREAKEVEN_STOP" if result.is_breakeven else "TRAILING_STOP"
+        journal = JournalEntry(
+            timestamp=now,
+            event_type=event,
+            setup_id=order.setup_id,
+            symbol=order.symbol,
+            direction=order.direction,
+            execution_mode=self._settings.execution_mode,
+            price=new_sl,
+            notes=result.reason,
+        )
+        db.add(journal)
+        db.commit()
+
+        log.info(
+            "be_trail_stop_updated",
+            order_id=order.id,
+            event=event,
+            old_sl=old_sl,
+            new_sl=new_sl,
+            breakeven=result.is_breakeven,
+            trailing=result.is_trailing,
+        )

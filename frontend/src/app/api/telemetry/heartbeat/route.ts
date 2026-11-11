@@ -1,79 +1,70 @@
 import { NextResponse } from "next/server";
+import { getServiceHeaders, getSupabaseUrl } from "@/lib/supabase/server";
 
-const DEFAULT_SUPABASE_URL = "https://bntqfzopbbeosruzjxbw.supabase.co";
-const DEFAULT_SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJudHFmem9wYmJlb3NydXpqeGJ3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MzM1OTEzOSwiZXhwIjoyMTA4OTM1MTM5fQ.jA3JXlfvnisozH2-beLVFkIBqEbMz9UGDmHAlewiNCQ";
-
+/**
+ * GET /api/telemetry/heartbeat
+ *
+ * Server-side route that fetches heartbeat + account snapshot from Supabase
+ * using the server-side service headers.
+ */
 export async function GET() {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || DEFAULT_SUPABASE_SERVICE_KEY;
+    const supabaseUrl = getSupabaseUrl();
+    const headers = getServiceHeaders();
 
-    const headers = {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    };
-
-    // 1. Fetch heartbeat and snapshot concurrently in parallel (2x faster)
+    // Fetch heartbeat and snapshot concurrently
     const [hbRes, snapRes] = await Promise.all([
-      fetch(`${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
-      fetch(`${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`, { headers, cache: "no-store" }).catch(() => null),
+      fetch(
+        `${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`,
+        { headers, cache: "no-store" }
+      ).catch(() => null),
+      fetch(
+        `${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`,
+        { headers, cache: "no-store" }
+      ).catch(() => null),
     ]);
 
     let heartbeat = null;
-    if (hbRes && hbRes.ok) {
-      const hbList = await hbRes.json();
-      if (hbList && hbList.length > 0) {
-        heartbeat = hbList[0];
-      }
+    if (hbRes?.ok) {
+      const list = await hbRes.json();
+      if (Array.isArray(list) && list.length > 0) heartbeat = list[0];
     }
 
     let snapshot = null;
-    if (snapRes && snapRes.ok) {
-      const snapList = await snapRes.json();
-      if (snapList && snapList.length > 0) {
-        snapshot = snapList[0];
-      }
+    if (snapRes?.ok) {
+      const list = await snapRes.json();
+      if (Array.isArray(list) && list.length > 0) snapshot = list[0];
     }
 
+    // Synthesise a minimal snapshot from heartbeat if DB snapshot not available
     if (!snapshot && heartbeat) {
       snapshot = {
-        ts: heartbeat.ts,
-        equity: heartbeat.equity,
-        balance: heartbeat.balance,
-        margin_free: heartbeat.equity,
-        margin_used: 0,
-        margin_level: 0,
-        open_positions: 0,
-        daily_pnl: 0,
-        drawdown_pct: 0,
+        ts:                  heartbeat.ts,
+        equity:              heartbeat.equity,
+        balance:             heartbeat.balance,
+        open_positions_count: 0,
+        open_positions:       0,
+        daily_pnl:            0,
+        drawdown_pct:         0,
+        execution_mode:       heartbeat.execution_mode,
       };
     }
 
-    // 2. Determine if currently online
+    // Determine online status
     let isOnline = false;
-    if (heartbeat && heartbeat.ts) {
+    if (heartbeat?.ts) {
       const ageMs = Date.now() - new Date(heartbeat.ts).getTime();
-      isOnline = heartbeat.mt5_connected && ageMs < 45_000;
+      isOnline = heartbeat.mt5_connected === true && ageMs < 45_000;
     }
 
     return NextResponse.json(
-      {
-        success: true,
-        is_online: isOnline,
-        heartbeat,
-        snapshot,
-        timestamp: new Date().toISOString(),
-      },
-      {
-        headers: {
-          "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2",
-        },
-      }
+      { success: true, is_online: isOnline, heartbeat, snapshot, timestamp: new Date().toISOString() },
+      { headers: { "Cache-Control": "public, s-maxage=1, stale-while-revalidate=2" } }
     );
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Telemetry error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Telemetry error" },
+      { status: 500 }
+    );
   }
 }
