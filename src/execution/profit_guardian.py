@@ -2,15 +2,14 @@
 Profit Guardian — Dynamic Trailing Stop Loss & Aggressive Retracement Protection.
 
 Provides:
-1. Breakeven Migration: Shifts SL to entry + 1 pip when position achieves 1.0R.
-2. Structural Step Trailing: Locks in profit at 1.5R (+0.5R locked), 2.0R (+1.0R locked).
+1. Breakeven Migration: Shifts SL to entry + buffer when position achieves breakeven_r.
+2. Structural Step Trailing: Locks in profit at trailing_start_r (+0.5R locked) and 2.0R (+1.0R locked).
 3. Aggressive Retracement Protection: Detects sharp adverse market pulls from peak profit
-   and tightens SL or triggers protective exit to lock in banked gains.
+   and tightens SL or triggers protective market exit to lock in banked gains.
 4. Multi-Account Sync: Propagates SL modifications across child accounts in <200ms.
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
@@ -18,7 +17,7 @@ from typing import Optional, TYPE_CHECKING
 from src.utils.logging_config import get_logger
 
 if TYPE_CHECKING:
-    from src.execution.mt5_executor import MT5Executor, MT5Position
+    from src.execution.mt5_executor import MT5Executor
     from src.execution.multi_account_copier import MultiAccountCopier
 
 log = get_logger(__name__)
@@ -37,6 +36,7 @@ class PositionTrackingState:
     current_sl: float
     peak_price: float
     peak_r: float = 0.0
+    peak_profit_usd: float = 0.0
     breakeven_activated: bool = False
     guardian_activated: bool = False
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -52,9 +52,9 @@ class ProfitGuardian:
         self,
         master_executor: MT5Executor,
         copier: Optional[MultiAccountCopier] = None,
-        breakeven_r: float = 1.0,           # Activate breakeven at 1.0R
-        trailing_start_r: float = 1.5,      # Start trailing lock at 1.5R
-        retrace_lock_pct: float = 0.40,     # If 40% of peak profit evaporates, lock in remainder
+        breakeven_r: float = 1.0,           # Activate breakeven at breakeven_r
+        trailing_start_r: float = 1.5,      # Start trailing lock at trailing_start_r
+        retrace_lock_pct: float = 0.40,     # If retrace_lock_pct of peak profit evaporates, lock in remainder
     ) -> None:
         self.master_executor = master_executor
         self.copier = copier
@@ -73,7 +73,12 @@ class ProfitGuardian:
         tp: float,
     ) -> PositionTrackingState:
         """Register a newly opened position for profit guarding."""
-        risk_dist = abs(entry_price - sl)
+        if sl and sl > 0:
+            risk_dist = abs(entry_price - sl)
+        else:
+            # Realistic fallback risk distance if position was opened without SL (0.2% of entry)
+            risk_dist = round(entry_price * (0.0015 if "XAU" in symbol.upper() else 0.0025), 2)
+
         if risk_dist <= 0:
             risk_dist = 0.01
 
@@ -88,6 +93,7 @@ class ProfitGuardian:
             current_sl=sl,
             peak_price=entry_price,
             peak_r=0.0,
+            peak_profit_usd=0.0,
         )
         self._positions[ticket] = state
         log.info(
@@ -133,40 +139,43 @@ class ProfitGuardian:
         proposed_sl = state.current_sl
         reason = ""
 
-        # ── 1. Breakeven Shift at 1.0R ──────────────────────────────────────────
+        def _improves_sl(candidate: float) -> bool:
+            if state.current_sl <= 0:
+                return True
+            return candidate > proposed_sl if is_bullish else candidate < proposed_sl
+
+        # ── 1. Breakeven Shift at breakeven_r ───────────────────────────────────
         if floating_r >= self.breakeven_r and not state.breakeven_activated:
-            buffer = 0.10 if "XAU" in state.symbol else 5.0
+            buffer = 0.15 if "XAU" in state.symbol.upper() else 6.0
             new_be = state.entry_price + buffer if is_bullish else state.entry_price - buffer
-            if (is_bullish and new_be > state.current_sl) or (not is_bullish and new_be < state.current_sl):
+            if _improves_sl(new_be):
                 proposed_sl = new_be
-                state.breakeven_activated = true = True
+                state.breakeven_activated = True
                 reason = f"BREAKEVEN: Trade reached {floating_r:.2f}R. SL moved to entry + buffer."
 
-        # ── 2. Structural Profit Lock at 1.5R and 2.0R ──────────────────────────
+        # ── 2. Structural Profit Lock at trailing_start_r and 2.0R ──────────────
         if floating_r >= 2.0:
             locked_dist = risk_dist * 1.0  # Lock +1.0R
             new_sl = state.entry_price + locked_dist if is_bullish else state.entry_price - locked_dist
-            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and new_sl < proposed_sl):
+            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or new_sl < proposed_sl)):
                 proposed_sl = new_sl
                 reason = f"PROFIT_LOCK_2R: Trade reached {floating_r:.2f}R. SL locked at +1.0R profit."
         elif floating_r >= self.trailing_start_r:
             locked_dist = risk_dist * 0.5  # Lock +0.5R
             new_sl = state.entry_price + locked_dist if is_bullish else state.entry_price - locked_dist
-            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and new_sl < proposed_sl):
+            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or new_sl < proposed_sl)):
                 proposed_sl = new_sl
                 reason = f"PROFIT_LOCK_1.5R: Trade reached {floating_r:.2f}R. SL locked at +0.5R profit."
 
         # ── 3. Aggressive Retracement Guardian ──────────────────────────────────
-        # If trade rose to >= 1.2R, but retraces by more than retrace_lock_pct from peak
         if state.peak_r >= 1.2:
             retrace_amount = peak_gain - current_gain
             retrace_pct = (retrace_amount / peak_gain) if peak_gain > 0 else 0.0
 
             if retrace_pct >= self.retrace_lock_pct:
-                # Lock in at least 50% of the peak profit before giving back more
                 guaranteed_gain = peak_gain * (1.0 - self.retrace_lock_pct)
                 guardian_sl = state.entry_price + guaranteed_gain if is_bullish else state.entry_price - guaranteed_gain
-                if (is_bullish and guardian_sl > proposed_sl) or (not is_bullish and guardian_sl < proposed_sl):
+                if (is_bullish and guardian_sl > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or guardian_sl < proposed_sl)):
                     proposed_sl = guardian_sl
                     state.guardian_activated = True
                     reason = (
@@ -181,7 +190,41 @@ class ProfitGuardian:
 
         return False, None, "No SL modification needed"
 
-    def apply_broker_sl(self, ticket: int, new_sl: float) -> bool:
+    def should_harvest_profit(
+        self,
+        ticket: int,
+        current_price: float,
+        current_profit_usd: float,
+    ) -> tuple[bool, str]:
+        """
+        Checks if a winning position is experiencing an aggressive retracement
+        after accumulating meaningful profit, signaling an immediate market close
+        so accumulated profits are banked before turning into a loss.
+        """
+        state = self._positions.get(ticket)
+        if not state:
+            return False, ""
+
+        if current_profit_usd > state.peak_profit_usd:
+            state.peak_profit_usd = current_profit_usd
+
+        # Only harvest if trade is currently in net profit
+        if current_profit_usd <= 0.15:
+            return False, ""
+
+        # If peak profit reached >= $0.60 (or >= 0.85R) and gave back >= 35% of peak profit
+        if state.peak_profit_usd >= 0.60 or state.peak_r >= 0.85:
+            giveback = state.peak_profit_usd - current_profit_usd
+            giveback_pct = (giveback / state.peak_profit_usd) if state.peak_profit_usd > 0 else 0.0
+            if giveback_pct >= 0.35:
+                return True, (
+                    f"PROFIT HARVEST: Banking +${current_profit_usd:.2f} after {giveback_pct*100:.0f}% "
+                    f"pullback from peak +${state.peak_profit_usd:.2f} ({state.peak_r:.2f}R)"
+                )
+
+        return False, ""
+
+    def apply_broker_sl(self, ticket: int, new_sl: float, tp_override: Optional[float] = None) -> bool:
         """
         Sends TRADE_ACTION_SLTP to MT5 for Master position and syncs to all child accounts.
         """
@@ -191,19 +234,22 @@ class ProfitGuardian:
         if not state:
             return False
 
-        # 1. Update Master Position in MT5
+        target_tp = float(tp_override) if tp_override is not None else float(state.tp)
+        if tp_override is not None:
+            state.tp = target_tp
+
         req = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": ticket,
             "symbol": state.symbol,
-            "sl": float(new_sl),
-            "tp": float(state.tp),
+            "sl": round(float(new_sl), 2),
+            "tp": round(target_tp, 2),
         }
         res = mt5.order_send(req)
         master_ok = (res is not None and res.retcode == mt5.TRADE_RETCODE_DONE)
 
         if master_ok:
-            log.info("master_sl_updated", ticket=ticket, new_sl=new_sl)
+            log.info("master_sl_updated", ticket=ticket, new_sl=new_sl, tp=target_tp)
         else:
             err = res.comment if res else str(mt5.last_error())
             log.warning("master_sl_update_failed", ticket=ticket, error=err)
@@ -218,13 +264,17 @@ class ProfitGuardian:
                         continue
                     try:
                         self.copier._switch_account(child.account_id, child.password, child.server)
-                        child_new_sl = trade.entry_price + sl_distance_from_entry if state.direction in ("BULLISH", "BUY") else trade.entry_price - sl_distance_from_entry
+                        child_new_sl = (
+                            trade.entry_price + sl_distance_from_entry
+                            if state.direction in ("BULLISH", "BUY")
+                            else trade.entry_price - sl_distance_from_entry
+                        )
                         child_req = {
                             "action": mt5.TRADE_ACTION_SLTP,
                             "position": trade.child_ticket,
                             "symbol": trade.symbol,
-                            "sl": float(child_new_sl),
-                            "tp": float(trade.tp),
+                            "sl": round(float(child_new_sl), 2),
+                            "tp": round(float(trade.tp), 2),
                         }
                         mt5.order_send(child_req)
                     except Exception as exc:

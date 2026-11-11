@@ -1,17 +1,19 @@
 @echo off
-TITLE Exness MT5 - Cloud Dashboard Live Bridge
+title ELIXAN QUANT - 24/7 Immortal Exness MT5 Trading Engine
 color 0A
-echo ================================================================
-echo       EXNESS METATRADER 5 LIVE BRIDGE TO CLOUD DASHBOARD         
-echo ================================================================
-echo.
-echo Connecting to local Exness MT5 terminal and broadcasting telemetry...
-echo.
+cd /d "%~dp0"
 
-IF EXIST ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" connect_exness.py %*
-) ELSE (
-    python connect_exness.py %*
-)
+echo =====================================================================
+echo   ELIXAN QUANT AI - 24/7 AUTONOMOUS EXNESS MT5 TRADING ENGINE
+echo   - Early Breakeven @ 0.50R (Zero-Loss Protection on Winners)
+echo   - Profit Harvester @ 35%% Pullback from Peak
+echo   - Multi-Account Fast Copier ^& Real-Time Dashboard Telemetry
+echo   - Auto-Restart Watchdog Active (Press Ctrl+C to Stop)
+echo =====================================================================
 
-pause
+:watchdog_loop
+echo [%TIME%] Starting Exness MT5 Live Bridge Engine...
+.\.venv\Scripts\python.exe connect_exness.py %*
+echo [%TIME%] Engine process exited. Restarting in 3 seconds (Press Ctrl+C to cancel)...
+timeout /t 3
+goto watchdog_loop
