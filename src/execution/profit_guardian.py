@@ -145,8 +145,9 @@ class ProfitGuardian:
             return candidate > proposed_sl if is_bullish else candidate < proposed_sl
 
         # ── 1. Breakeven Shift at breakeven_r ───────────────────────────────────
-        if floating_r >= self.breakeven_r and not state.breakeven_activated:
-            buffer = 0.15 if "XAU" in state.symbol.upper() else 6.0
+        effective_be_r = min(self.breakeven_r, 0.38) if "XAU" in state.symbol.upper() else self.breakeven_r
+        if floating_r >= effective_be_r and not state.breakeven_activated:
+            buffer = 0.20 if "XAU" in state.symbol.upper() else 6.0
             new_be = state.entry_price + buffer if is_bullish else state.entry_price - buffer
             if _improves_sl(new_be):
                 proposed_sl = new_be

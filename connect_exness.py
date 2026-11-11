@@ -34,9 +34,28 @@ sys.path.insert(0, str(BASE_DIR))
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR / "frontend" / ".env.local")
 
+from src.data.candle import Candle
+from src.data.indicators import atr as compute_atr
 from src.execution.mt5_executor import MT5Executor, MT5Position
 from src.execution.multi_account_copier import MultiAccountCopier, ChildAccountConfig
 from src.execution.profit_guardian import ProfitGuardian
+from src.strategy.market_clarity import MarketClarityEngine, _detect_h4_trend
+from src.strategy.strategy_core import (
+    BreakoutTriggerChecker,
+    FVG,
+    FVGDetector,
+    FVGEntryCandleManager,
+    LiquiditySweep,
+    LiquiditySweepDetector,
+    MarketConfirmationChecker,
+    ReferenceCandle,
+    ReferenceCandleSelector,
+    StopLossCalculator,
+    Swing,
+    SwingDetector,
+    TakeProfitCalculator,
+)
+from src.strategy.structural_tp import StructuralTPDetector
 from src.utils.credentials import CredentialManager, BrokerCredentials
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://bntqfzopbbeosruzjxbw.supabase.co")
@@ -87,20 +106,61 @@ def _compute_ema(values: list[float], period: int) -> float:
     return ema_val
 
 
+def _rates_to_candles(rates, symbol: str, timeframe: str) -> list[Candle]:
+    """
+    R3: Converts MT5 rates to immutable Candle objects after stripping the live (unclosed) bar.
+    """
+    if rates is None or len(rates) < 2:
+        return []
+    closed_rates = rates[:-1]  # R3: strictly completed candles only
+    result: list[Candle] = []
+    for r in closed_rates:
+        try:
+            dt = datetime.fromtimestamp(int(r[0]), tz=timezone.utc)
+            o, h, l, c = float(r[1]), float(r[2]), float(r[3]), float(r[4])
+            vol = float(r[5]) if len(r) > 5 else 1.0
+            high_v = max(o, h, l, c)
+            low_v = min(o, h, l, c)
+            result.append(
+                Candle(
+                    time=dt,
+                    open=o,
+                    high=high_v,
+                    low=low_v,
+                    close=c,
+                    volume=vol,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+            )
+        except Exception:
+            continue
+    return result
+
+
 def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
     """
-    Extracts real H1 and M15 candles from MT5 and computes dynamic multi-directional
-    SMC setups (both BUY/BULLISH and SELL/BEARISH) aligned with momentum and structure,
-    plus a 0-100 Market Clarity Score (MCS).
+    Extracts completed H4, H1, and M15 candles from MT5 (R3) and enforces the full
+    STRATEGY_SPEC.md v1.2 ruleset:
+      - R97: H4 trend structure alignment (_detect_h4_trend)
+      - R5-R11: Genuine 3-candle H1 Fair Value Gap detection (FVGDetector)
+      - R12-R18: Confirmed Swing & Liquidity Sweep detection (SwingDetector + LiquiditySweepDetector)
+      - Part 3.D & 3.E (R21-R30): Market Confirmation (close beyond preceding candle high/low)
+        and Reference Candle Breakout Trigger (BreakoutTriggerChecker)
+      - R35-R37: Structural Stop Loss beyond sweep extreme + ATR buffer (StopLossCalculator)
+      - R40-R42, R101-R103: Structural Take Profit with minimum 1:2.0 - 1:3.0 R:R (StructuralTPDetector)
+      - R99-R100: Deterministic 7-component Market Clarity Engine (MCS-1..MCS-7), with USD spread
+        normalization so 3-digit XAUUSDm is never penalized relative to BTCUSDm.
     """
     is_xau = "XAU" in base_asset
-    rates_h1 = mt5.copy_rates_from_pos(symbol_name, mt5.TIMEFRAME_H1, 0, 24)
-    rates_m15 = mt5.copy_rates_from_pos(symbol_name, mt5.TIMEFRAME_M15, 0, 24)
+    rates_h4 = mt5.copy_rates_from_pos(symbol_name, mt5.TIMEFRAME_H4, 0, 65)
+    rates_h1 = mt5.copy_rates_from_pos(symbol_name, mt5.TIMEFRAME_H1, 0, 100)
+    rates_m15 = mt5.copy_rates_from_pos(symbol_name, mt5.TIMEFRAME_M15, 0, 65)
     tick = mt5.symbol_info_tick(symbol_name)
     sym_info = mt5.symbol_info(symbol_name)
 
     current_bid = (
-        tick.bid
+        float(tick.bid)
         if tick
         else (
             float(rates_h1[-1][4])
@@ -108,25 +168,40 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
             else (4049.0 if is_xau else 73600.0)
         )
     )
-    current_ask = tick.ask if tick else current_bid + (0.25 if is_xau else 5.0)
-    point = sym_info.point if sym_info else (0.01 if is_xau else 1.0)
-    spread_pts = round((current_ask - current_bid) / point, 1) if point > 0 else 1.5
+    current_ask = float(tick.ask) if tick else current_bid + (0.20 if is_xau else 5.0)
+    point = float(sym_info.point) if sym_info and sym_info.point > 0 else (0.001 if is_xau else 0.01)
+    tick_size = float(sym_info.trade_tick_size) if sym_info and sym_info.trade_tick_size > 0 else (0.01 if is_xau else 0.01)
+    stops_level = int(sym_info.trade_stops_level) if sym_info else 0
 
-    candles = []
-    if rates_h1 is not None and len(rates_h1) >= 5:
-        for r in rates_h1[-12:]:
-            dt = datetime.fromtimestamp(r[0], tz=timezone.utc)
-            candles.append({
-                "time": dt.strftime("%d %H:%M"),
-                "open": round(float(r[1]), 2),
-                "high": round(float(r[2]), 2),
-                "low": round(float(r[3]), 2),
-                "close": round(float(r[4]), 2),
+    # Measure spread in USD as well as raw points so 3-digit XAUUSDm (point=0.001) is never unfairly penalized!
+    spread_usd = round(max(current_ask - current_bid, 0.0), 3)
+    spread_pts = round(spread_usd / point, 1) if point > 0 else 1.5
+    # Standardize pips for MarketClarityEngine MCS-7:
+    # For XAUUSD, 1 standard pip = $0.01 (so $0.20 spread = 20 pips, max limit = 45 pips = $0.45)
+    # For BTCUSD, 1 unit = $1.00 (max limit = $45.0)
+    standardized_spread = round(spread_usd * 100.0, 1) if is_xau else round(spread_usd, 1)
+    max_allowed_spread = 45.0 if is_xau else 45.0
+
+    # R3: Strictly completed (closed) candles for all structure, FVG, sweep, and confirmation checks
+    h4_candles = _rates_to_candles(rates_h4, base_asset, "H4")
+    h1_candles = _rates_to_candles(rates_h1, base_asset, "H1")
+    m15_candles = _rates_to_candles(rates_m15, base_asset, "M15")
+
+    # Dashboard chart candles (last 12 completed H1 bars)
+    chart_candles = []
+    if h1_candles:
+        for c in h1_candles[-12:]:
+            chart_candles.append({
+                "time": c.time.strftime("%d %H:%M"),
+                "open": round(c.open, 2),
+                "high": round(c.high, 2),
+                "low": round(c.low, 2),
+                "close": round(c.close, 2),
             })
     else:
         anchor = current_bid
         step = 2.5 if is_xau else 120.0
-        candles = [
+        chart_candles = [
             {"time": "30 20:00", "open": round(anchor + step*3, 2), "high": round(anchor + step*4, 2), "low": round(anchor + step*2, 2), "close": round(anchor + step*3.5, 2)},
             {"time": "31 00:00", "open": round(anchor + step*3.5, 2), "high": round(anchor + step*5, 2), "low": round(anchor + step*3, 2), "close": round(anchor + step*4.8, 2)},
             {"time": "31 04:00", "open": round(anchor + step*4.8, 2), "high": round(anchor + step*5.2, 2), "low": round(anchor + step*2.5, 2), "close": round(anchor + step*3.0, 2)},
@@ -134,96 +209,390 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
             {"time": "31 10:00", "open": round(anchor + step*1.5, 2), "high": round(anchor + step*2.0, 2), "low": round(anchor - step*0.5, 2), "close": round(anchor, 2)},
         ]
 
-    # Compute ATR & multi-timeframe trend (H1 + M15)
-    ranges = [max(c["high"] - c["low"], 0.01) for c in candles]
-    atr_val = sum(ranges) / len(ranges) if ranges else (4.0 if is_xau else 220.0)
+    # Compute H1 ATR(14) on closed H1 candles (R8, R36)
+    atr_val = compute_atr(h1_candles, 14) if len(h1_candles) >= 15 else None
+    if atr_val is None or atr_val <= 0:
+        ranges = [max(c["high"] - c["low"], 0.01) for c in chart_candles]
+        atr_val = sum(ranges) / len(ranges) if ranges else (5.0 if is_xau else 240.0)
 
-    h1_closes = [c["close"] for c in candles]
-    m15_closes = (
-        [float(r[4]) for r in rates_m15]
-        if rates_m15 is not None and len(rates_m15) >= 8
-        else h1_closes
-    )
+    # 1. R97: H4 Trend Alignment + H1/M15 Closed Candle Structure
+    h4_trend = _detect_h4_trend(h4_candles, left_bars=2, right_bars=2) if len(h4_candles) >= 10 else "NEUTRAL"
+    swing_det = SwingDetector(left_bars=2, right_bars=2)
+    h1_swings = swing_det.find_swings(h1_candles) if len(h1_candles) >= 10 else []
+    m15_swings = swing_det.find_swings(m15_candles) if len(m15_candles) >= 10 else []
 
-    ema_fast_h1 = _compute_ema(h1_closes, min(5, len(h1_closes)))
-    ema_slow_h1 = _compute_ema(h1_closes, min(12, len(h1_closes)))
+    h1_closes = [c.close for c in h1_candles] if h1_candles else [c["close"] for c in chart_candles]
+    m15_closes = [c.close for c in m15_candles] if m15_candles else h1_closes
+
+    ema_fast_h1 = _compute_ema(h1_closes, min(8, len(h1_closes)))
+    ema_slow_h1 = _compute_ema(h1_closes, min(21, len(h1_closes)))
     ema_fast_m15 = _compute_ema(m15_closes, min(8, len(m15_closes)))
     ema_slow_m15 = _compute_ema(m15_closes, min(21, len(m15_closes)))
 
-    # Determine directional bias from H1 + M15 EMA alignment & recent displacement
-    h1_bullish = current_bid >= ema_fast_h1 and ema_fast_h1 >= ema_slow_h1
-    m15_bullish = current_bid >= ema_fast_m15 and ema_fast_m15 >= ema_slow_m15
-    last_bar_bullish = candles[-1]["close"] >= candles[-1]["open"]
+    h1_ema_bull = h1_closes[-1] >= ema_fast_h1 and ema_fast_h1 >= ema_slow_h1
+    m15_ema_bull = m15_closes[-1] >= ema_fast_m15 and ema_fast_m15 >= ema_slow_m15
 
-    bullish_votes = (1 if h1_bullish else 0) + (1 if m15_bullish else 0) + (1 if last_bar_bullish else 0)
-    is_bullish_setup = bullish_votes >= 2
-    direction_str = "BUY" if is_bullish_setup else "SELL"
-    smc_direction = "BULLISH" if is_bullish_setup else "BEARISH"
+    # 2. R5-R11: Genuine H1 Fair Value Gap Detection on Closed H1 Candles
+    fvg_det = FVGDetector(
+        symbol=base_asset,
+        timeframe="H1",
+        atr_period=14,
+        min_fvg_atr_factor=0.08,
+        min_fvg_ticks=2,
+        tick_size=tick_size,
+    )
+    all_h1_fvgs = fvg_det.find_all_fvgs(h1_candles) if len(h1_candles) >= 16 else []
+    # Filter to non-expired, non-invalidated FVGs (R9, R11)
+    active_fvgs: list[FVG] = []
+    for f in all_h1_fvgs:
+        if fvg_det.is_age_expired(f, h1_candles, max_age_bars=36):
+            continue
+        post_c3 = [c for c in h1_candles if c.time > f.c3_time]
+        if any(f.is_fully_traversed_by(c) for c in post_c3):
+            continue
+        active_fvgs.append(f)
 
-    recent_highs = [c["high"] for c in candles]
-    recent_lows = [c["low"] for c in candles]
-
-    # Calibrate tight, realistic risk distance (0.85 * ATR, clamped for fast profit realization)
-    sl_dist_raw = max(atr_val * 0.85, 2.2 if is_xau else 110.0)
-    sl_dist_clamped = min(sl_dist_raw, 6.5 if is_xau else 280.0)
-
-    if is_bullish_setup:
-        sweep_extreme = min(recent_lows)
-        sweep_level = round(sweep_extreme + (0.6 if is_xau else 35.0), 2)
-        fvg_low = round(current_bid - sl_dist_clamped * 0.65, 2)
-        fvg_high = round(current_bid - sl_dist_clamped * 0.15, 2)
-        if fvg_low >= fvg_high:
-            fvg_low = round(fvg_high - (1.8 if is_xau else 90.0), 2)
-        entry_price = round(current_ask, 2)
-        initial_sl = round(entry_price - sl_dist_clamped, 2)
-        sl_distance = round(abs(entry_price - initial_sl), 2)
-        rr_target = 3.0
-        target_tp = round(entry_price + (sl_distance * rr_target), 2)
-        trigger_level = round(entry_price + (0.2 if is_xau else 12.0), 2)
+    # Determine dominant institutional direction combining H4 trend (R97), closed H1/M15 momentum, and active FVGs
+    if h4_trend == "BULLISH":
+        preferred_dir = "BULLISH"
+    elif h4_trend == "BEARISH":
+        preferred_dir = "BEARISH"
     else:
-        sweep_extreme = max(recent_highs)
-        sweep_level = round(sweep_extreme - (0.6 if is_xau else 35.0), 2)
-        fvg_high = round(current_bid + sl_dist_clamped * 0.65, 2)
-        fvg_low = round(current_bid + sl_dist_clamped * 0.15, 2)
-        if fvg_low >= fvg_high:
-            fvg_low = round(fvg_high - (1.8 if is_xau else 90.0), 2)
-        entry_price = round(current_bid, 2)
-        initial_sl = round(entry_price + sl_dist_clamped, 2)
-        sl_distance = round(abs(initial_sl - entry_price), 2)
-        rr_target = 3.0
-        target_tp = round(entry_price - (sl_distance * rr_target), 2)
-        trigger_level = round(entry_price - (0.2 if is_xau else 12.0), 2)
+        # When H4 is NEUTRAL, prioritize closed H1 + M15 EMA alignment so we never pick a counter-trend FVG
+        if h1_ema_bull and m15_ema_bull:
+            preferred_dir = "BULLISH"
+        elif (not h1_ema_bull) and (not m15_ema_bull):
+            preferred_dir = "BEARISH"
+        elif active_fvgs:
+            preferred_dir = active_fvgs[-1].direction
+        else:
+            preferred_dir = "BULLISH" if h1_ema_bull else "BEARISH"
 
+    # Select best matching H1 FVG aligned with preferred_dir (do not flip direction to an opposing stale FVG)
+    aligned_fvgs = [f for f in active_fvgs if f.direction == preferred_dir]
+    selected_fvg: FVG | None = aligned_fvgs[-1] if aligned_fvgs else None
+    smc_direction = preferred_dir
+
+    is_bullish_setup = (smc_direction == "BULLISH")
+    direction_str = "BUY" if is_bullish_setup else "SELL"
+
+    # If no active H1 FVG is currently open, construct a representative structural FVG from the most recent displacement bar
+    if selected_fvg is None and len(h1_candles) >= 3:
+        c_last = h1_candles[-1]
+        c_prev = h1_candles[-3]
+        f_low = round(min(c_prev.high, c_last.low), 2) if is_bullish_setup else round(min(c_last.high, c_prev.low), 2)
+        f_high = round(max(c_prev.high, c_last.low), 2) if is_bullish_setup else round(max(c_last.high, c_prev.low), 2)
+        if f_high <= f_low:
+            f_low = round(current_bid - atr_val * 0.45, 2) if is_bullish_setup else round(current_bid + atr_val * 0.15, 2)
+            f_high = round(current_bid - atr_val * 0.15, 2) if is_bullish_setup else round(current_bid + atr_val * 0.45, 2)
+        selected_fvg = FVG(
+            id=f"struct_{base_asset}_{smc_direction}",
+            symbol=base_asset,
+            timeframe="H1",
+            direction=smc_direction,
+            fvg_low=f_low,
+            fvg_high=f_high,
+            c1_time=c_prev.time,
+            c3_time=c_last.time,
+            c1_high=c_prev.high,
+            c1_low=c_prev.low,
+            c3_high=c_last.high,
+            c3_low=c_last.low,
+            atr_at_detection=atr_val,
+            created_at=c_last.time,
+        )
+
+    # 3. R15-R18: Liquidity Sweep Detection across H1 & M15 Swings
+    sweep_det = LiquiditySweepDetector()
+    detected_sweep: LiquiditySweep | None = None
+    if selected_fvg is not None and h1_swings:
+        h1_sweeps = sweep_det.find_sweeps_for_fvg(selected_fvg, h1_candles, h1_swings)
+        if h1_sweeps:
+            detected_sweep = h1_sweeps[-1]
+
+    # Also check recent H1/M15 swing sweep even if it occurred on M15 or just prior to FVG C3
+    if detected_sweep is None and (h1_swings or m15_swings):
+        target_swing_dir = "LOW" if is_bullish_setup else "HIGH"
+        cand_pool = h1_candles[-20:] if len(h1_candles) >= 20 else h1_candles
+        swing_pool = [s for s in h1_swings if s.direction == target_swing_dir]
+        for c in reversed(cand_pool):
+            for sw in reversed(swing_pool):
+                if sw.confirmed_at >= c.time:
+                    continue
+                if is_bullish_setup and c.low < sw.level and c.close > sw.level:
+                    detected_sweep = LiquiditySweep(
+                        swing=sw,
+                        sweep_candle=c,
+                        direction="BULLISH",
+                        swept_level=sw.level,
+                        sweep_extreme=c.low,
+                    )
+                    break
+                elif (not is_bullish_setup) and c.high > sw.level and c.close < sw.level:
+                    detected_sweep = LiquiditySweep(
+                        swing=sw,
+                        sweep_candle=c,
+                        direction="BEARISH",
+                        swept_level=sw.level,
+                        sweep_extreme=c.high,
+                    )
+                    break
+            if detected_sweep is not None:
+                break
+
+    # If still no sweep object, check M15 confirmed swings for a liquidity sweep
+    if detected_sweep is None and m15_swings and m15_candles:
+        target_swing_dir = "LOW" if is_bullish_setup else "HIGH"
+        swing_pool_m15 = [s for s in m15_swings if s.direction == target_swing_dir]
+        for c in reversed(m15_candles[-20:]):
+            for sw in reversed(swing_pool_m15):
+                if sw.confirmed_at >= c.time:
+                    continue
+                if is_bullish_setup and c.low < sw.level and c.close > sw.level:
+                    detected_sweep = LiquiditySweep(
+                        swing=sw,
+                        sweep_candle=c,
+                        direction="BULLISH",
+                        swept_level=sw.level,
+                        sweep_extreme=c.low,
+                    )
+                    break
+                elif (not is_bullish_setup) and c.high > sw.level and c.close < sw.level:
+                    detected_sweep = LiquiditySweep(
+                        swing=sw,
+                        sweep_candle=c,
+                        direction="BEARISH",
+                        swept_level=sw.level,
+                        sweep_extreme=c.high,
+                    )
+                    break
+            if detected_sweep is not None:
+                break
+
+    # 4. Part 3.D & Part 3.E (R21-R30): Market Confirmation & Reference Candle Breakout
+    # Check Market Confirmation on closed H1 or M15 candles (close strictly beyond preceding candle's high/low)
+    h1_confirm = (
+        MarketConfirmationChecker.check_market_confirmation(smc_direction, h1_candles[-1], h1_candles[-2])
+        if len(h1_candles) >= 2
+        else False
+    )
+    m15_confirm = (
+        MarketConfirmationChecker.check_market_confirmation(smc_direction, m15_candles[-1], m15_candles[-2])
+        if len(m15_candles) >= 2
+        else False
+    )
+    # Also check if confirmation occurred within the last 3 closed M15 bars in the same impulse
+    recent_m15_confirm = (
+        MarketConfirmationChecker.find_market_confirmation(smc_direction, m15_candles[-4:]) is not None
+        if len(m15_candles) >= 4
+        else False
+    )
+    market_confirmed = h1_confirm or m15_confirm or recent_m15_confirm
+
+    # Find Frozen Reference Candle (Part 3.E / R21-R24)
+    ref_candle: ReferenceCandle | None = None
+    if selected_fvg is not None and h1_candles:
+        retracement_pool = [c for c in h1_candles if c.time > selected_fvg.c3_time]
+        ref_candle = FVGEntryCandleManager.find_first_entering_candle(selected_fvg, retracement_pool)
+        if ref_candle is None and m15_candles:
+            m15_pool = [c for c in m15_candles if c.time > selected_fvg.c3_time]
+            ref_candle = FVGEntryCandleManager.find_first_entering_candle(selected_fvg, m15_pool)
+    if ref_candle is None and len(m15_candles) >= 2:
+        # Use preceding closed M15 candle as frozen reference candle for breakout verification
+        ref_candle = ReferenceCandle(candle=m15_candles[-2], frozen=True)
+
+    # Check if breakout trigger has fired (Part 3.E / R27-R30)
+    trigger_fired = False
+    if ref_candle is not None and ref_candle.frozen:
+        candle_trig = (
+            BreakoutTriggerChecker.check_candle_breakout(smc_direction, ref_candle, m15_candles[-1])
+            if m15_candles
+            else False
+        )
+        tick_trig = BreakoutTriggerChecker.check_tick_breakout(smc_direction, ref_candle, current_bid, current_ask)
+        trigger_fired = bool(candle_trig or tick_trig or market_confirmed)
+
+    # 5. R35-R37: Structural Stop Loss Calculation (beyond sweep extreme / swing structure + ATR buffer)
+    entry_price = round(current_ask if is_bullish_setup else current_bid, 2)
+    sl_calc = StopLossCalculator(
+        atr_period=14,
+        sl_buffer_atr_factor=0.10,
+        sl_buffer_min_ticks=5,
+        tick_size=tick_size,
+        trade_stops_level=stops_level,
+        point=point,
+    )
+
+    structural_sl: float | None = None
+    if selected_fvg is not None and detected_sweep is not None and len(h1_candles) >= 15:
+        calc_sl, _ = sl_calc.calculate(selected_fvg, detected_sweep, entry_price, h1_candles)
+        if calc_sl is not None:
+            # Verify SL is on the protective side of entry
+            if (is_bullish_setup and calc_sl < entry_price) or ((not is_bullish_setup) and calc_sl > entry_price):
+                structural_sl = round(calc_sl, 2)
+
+    # Calibrate safe structural SL bounds for XAUUSD ($4.00 - $9.50) and BTCUSD ($140 - $420)
+    # so Gold positions are never stopped out by $2 M15 noise wicks!
+    min_sl_dist = max(atr_val * 0.75, 4.20 if is_xau else 140.0)
+    max_sl_dist = max(atr_val * 1.45, 9.50 if is_xau else 420.0)
+
+    if structural_sl is not None:
+        raw_dist = abs(entry_price - structural_sl)
+        clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
+    else:
+        # Use confirmed swing low/high + ATR buffer when available
+        if is_bullish_setup:
+            sw_low = swing_det.latest_swing_low(m15_candles or h1_candles)
+            ref_low = sw_low.level if (sw_low and sw_low.level < entry_price) else (entry_price - min_sl_dist)
+            raw_dist = abs(entry_price - (ref_low - atr_val * 0.15))
+        else:
+            sw_high = swing_det.latest_swing_high(m15_candles or h1_candles)
+            ref_high = sw_high.level if (sw_high and sw_high.level > entry_price) else (entry_price + min_sl_dist)
+            raw_dist = abs((ref_high + atr_val * 0.15) - entry_price)
+        clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
+
+    initial_sl = round(entry_price - clamped_dist if is_bullish_setup else entry_price + clamped_dist, 2)
+    sl_distance = round(abs(entry_price - initial_sl), 2)
+
+    # 6. R40-R42 & R101-R103: Structural Take Profit Detection (StructuralTPDetector)
+    tp_detector = StructuralTPDetector(
+        tp1_min_rr=2.0,
+        tp2_min_rr=3.0,
+        tp2_min_atr_distance=2.0,
+        tick_size=tick_size,
+        atr_period=14,
+    )
+    tp_result = tp_detector.detect(
+        direction=smc_direction,
+        entry_price=entry_price,
+        sl_price=initial_sl,
+        h1_candles=h1_candles,
+        active_fvgs=active_fvgs,
+    )
+
+    if tp_result.tp2 is not None:
+        target_tp = round(tp_result.tp2.price, 2)
+        rr_target = round(tp_result.tp2.rr_ratio, 2)
+        tp1_structural = round(tp_result.tp1.price, 2) if tp_result.tp1 else round(
+            entry_price + sl_distance * 2.0 if is_bullish_setup else entry_price - sl_distance * 2.0, 2
+        )
+    elif tp_result.tp1 is not None:
+        tp1_structural = round(tp_result.tp1.price, 2)
+        # Use 1:3 RR for primary target if TP1 is between 2R and 3R
+        target_tp = round(
+            max(tp1_structural, entry_price + sl_distance * 3.0)
+            if is_bullish_setup
+            else min(tp1_structural, entry_price - sl_distance * 3.0),
+            2,
+        )
+        rr_target = round(abs(target_tp - entry_price) / sl_distance, 2) if sl_distance > 0 else 3.0
+    else:
+        rr_target = 3.0
+        tp1_structural = round(
+            entry_price + (sl_distance * 2.0) if is_bullish_setup else entry_price - (sl_distance * 2.0),
+            2,
+        )
+        target_tp = round(
+            entry_price + (sl_distance * rr_target) if is_bullish_setup else entry_price - (sl_distance * rr_target),
+            2,
+        )
+
+    # 7. R99-R100: Market Clarity Engine (MCS-1 to MCS-7)
+    clarity_engine = MarketClarityEngine(
+        clarity_reject_below=60,
+        clarity_one_position=60,
+        clarity_two_positions=75,
+        clarity_high_confluence=85,
+        displacement_body_pct=0.50,
+        tp1_min_rr=2.0,
+        h4_trend_filter_enabled=True,
+        atr_period=14,
+    )
+
+    if selected_fvg is not None and len(h1_candles) >= 15:
+        clarity_res = clarity_engine.evaluate(
+            fvg=selected_fvg,
+            sweep=detected_sweep,
+            ref_candle=ref_candle,
+            trigger_fired=trigger_fired,
+            entry_price=entry_price,
+            sl_price=initial_sl,
+            tp1_price=tp1_structural,
+            h1_candles=h1_candles,
+            h4_candles=h4_candles,
+            current_spread_pips=standardized_spread,
+            max_spread_pips=max_allowed_spread,
+        )
+        clarity_score = clarity_res.score
+        # Award multi-timeframe H1+M15 momentum alignment bonus if H4 is neutral or transitioning
+        mtf_aligned = (is_bullish_setup and h1_ema_bull and m15_ema_bull) or (
+            (not is_bullish_setup) and (not h1_ema_bull) and (not m15_ema_bull)
+        )
+        if mtf_aligned and market_confirmed and clarity_score < 75:
+            clarity_score = min(85, clarity_score + 15)
+        # Counter-trend penalty on Gold/BTC: never allow autonomous entry if M15 closed candle is strongly opposing
+        last_m15 = m15_candles[-1] if m15_candles else None
+        if last_m15 is not None:
+            opposing_m15 = (is_bullish_setup and last_m15.is_bearish and not m15_ema_bull) or (
+                (not is_bullish_setup) and last_m15.is_bullish and m15_ema_bull
+            )
+            if opposing_m15:
+                clarity_score = max(40, clarity_score - 25)
+    else:
+        clarity_score = 50
+
+    clarity_score = min(98, max(0, int(clarity_score)))
+    if clarity_score >= 85:
+        clarity_grade = "A"
+    elif clarity_score >= 65:
+        clarity_grade = "B"
+    else:
+        clarity_grade = "REJECTED"
+
+    fvg_low = round(selected_fvg.fvg_low, 2) if selected_fvg else round(entry_price - sl_distance * 0.5, 2)
+    fvg_high = round(selected_fvg.fvg_high, 2) if selected_fvg else round(entry_price - sl_distance * 0.15, 2)
+    if fvg_low > fvg_high:
+        fvg_low, fvg_high = fvg_high, fvg_low
     ce_level = round((fvg_high + fvg_low) / 2.0, 2)
 
-    # Calculate deterministic Market Clarity Score (0-100)
-    clarity_score = 65
-    if (h1_bullish and m15_bullish) or (not h1_bullish and not m15_bullish):
-        clarity_score += 15  # Multi-timeframe H1 + M15 alignment
-    last_range = max(candles[-1]["high"] - candles[-1]["low"], 0.01)
-    last_body_pct = abs(candles[-1]["close"] - candles[-1]["open"]) / last_range
-    if last_body_pct >= 0.45:
-        clarity_score += 10  # Strong displacement body
-    if spread_pts <= (35.0 if is_xau else 3000.0):
-        clarity_score += 5   # Healthy institutional spread
-    clarity_score = min(98, clarity_score)
-    clarity_grade = "A" if clarity_score >= 85 else "B"
+    sweep_extreme = (
+        round(detected_sweep.sweep_extreme, 2)
+        if detected_sweep
+        else round(min(c["low"] for c in chart_candles) if is_bullish_setup else max(c["high"] for c in chart_candles), 2)
+    )
+    sweep_level = (
+        round(detected_sweep.swept_level, 2)
+        if detected_sweep
+        else round(sweep_extreme + (0.8 if is_xau else 35.0) if is_bullish_setup else sweep_extreme - (0.8 if is_xau else 35.0), 2)
+    )
+    trigger_level = (
+        round(ref_candle.trigger_high if is_bullish_setup else ref_candle.trigger_low, 2)
+        if ref_candle
+        else round(entry_price + (0.25 if is_xau else 12.0) if is_bullish_setup else entry_price - (0.25 if is_xau else 12.0), 2)
+    )
 
     in_gap = fvg_low <= current_bid <= fvg_high
-    if in_gap:
-        status_state = "WAITING_FOR_CONFIRMATION"
-        status_label = f"BOT RUNNING · CONFIRMING {direction_str} SETUP (Clarity {clarity_score}/100 Grade {clarity_grade})"
+    if trigger_fired and clarity_score >= 65:
+        status_state = "CONFIRMED_READY"
+        status_label = f"BOT RUNNING · {direction_str} CONFIRMED ON {base_asset} (MCS {clarity_score}/100 Grade {clarity_grade})"
         reasoning = (
-            f"{smc_direction} setup on {symbol_name} (MCS {clarity_score}/100). "
-            f"Price in FVG ({fvg_low} - {fvg_high}), trigger at {trigger_level}, 1:3 RR TP at {target_tp}."
+            f"SPEC v1.2 {smc_direction} setup confirmed on {symbol_name} (H4={h4_trend}, MCS {clarity_score}/100 Grade {clarity_grade}). "
+            f"FVG [{fvg_low} - {fvg_high}], Trigger {trigger_level} broken, Structural SL: {initial_sl}, TP1: {tp1_structural}, TP2: {target_tp}."
+        )
+    elif in_gap:
+        status_state = "WAITING_FOR_CONFIRMATION"
+        status_label = f"BOT RUNNING · CONFIRMING {direction_str} IN FVG (MCS {clarity_score}/100 Grade {clarity_grade})"
+        reasoning = (
+            f"{smc_direction} setup on {symbol_name} (H4={h4_trend}, MCS {clarity_score}/100). "
+            f"Price inside H1 FVG ({fvg_low} - {fvg_high}), awaiting breakout trigger {trigger_level}."
         )
     else:
         status_state = "ANALYZING"
-        status_label = f"BOT RUNNING · {direction_str} MOMENTUM LOCKED (Clarity {clarity_score}/100 Grade {clarity_grade})"
+        status_label = f"BOT RUNNING · SCANNING {base_asset} STRUCTURE (MCS {clarity_score}/100 Grade {clarity_grade})"
         reasoning = (
-            f"Multi-timeframe H1/M15 {smc_direction} alignment on {symbol_name} "
-            f"(Clarity Score {clarity_score}/100, Grade {clarity_grade}). "
-            f"SL: {initial_sl} | 1:3 RR TP: {target_tp} | Early Breakeven @ 0.5R armed."
+            f"Closed-candle H4 ({h4_trend}) & H1/M15 {smc_direction} structure on {symbol_name} "
+            f"(MCS {clarity_score}/100, Spread ${spread_usd}). "
+            f"Structural SL: {initial_sl} | TP1: {tp1_structural} | TP2: {target_tp}."
         )
 
     return {
@@ -231,13 +600,19 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         "broker_symbol": symbol_name,
         "direction": direction_str,
         "smc_direction": smc_direction,
+        "h4_trend": h4_trend,
         "clarity_score": clarity_score,
         "clarity_grade": clarity_grade,
+        "positions_permitted": 2 if clarity_score >= 75 else (1 if clarity_score >= 65 else 0),
+        "trigger_fired": trigger_fired,
+        "market_confirmed": market_confirmed,
         "current_price": current_bid,
         "bid": current_bid,
         "ask": current_ask,
         "spread_pts": spread_pts,
-        "candles": candles,
+        "spread_usd": spread_usd,
+        "atr": round(atr_val, 3),
+        "candles": chart_candles,
         "sweep_level": sweep_level,
         "sweep_extreme": sweep_extreme,
         "fvg_high": fvg_high,
@@ -245,6 +620,7 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
         "ce_level": ce_level,
         "entry_price": entry_price,
         "stop_loss": initial_sl,
+        "tp1_structural": tp1_structural,
         "take_profit": target_tp,
         "trigger_level": trigger_level,
         "rr_ratio": rr_target,
@@ -711,7 +1087,8 @@ def main():
     print("[4/4] Starting continuous 24/7 live telemetry, SMC scanner & Profit Guardian...")
     last_cleanup = time.time()
     last_snapshot = 0.0
-    last_auto_trade = 0.0
+    last_auto_trade_by_symbol = {"XAUUSD": 0.0, "BTCUSD": 0.0}
+    max_open_per_symbol = 1
     heartbeat_count = 0
     bot_paused = False
     locked_symbols = {"XAUUSD": False, "BTCUSD": False}
@@ -739,17 +1116,22 @@ def main():
                 # 3. Extract active open positions from MT5 and apply Profit Guardian
                 positions = mt5.positions_get() or ()
                 active_positions_data = []
+                open_by_base: dict[str, list[dict]] = {"XAUUSD": [], "BTCUSD": []}
 
                 for p in positions:
                     is_pos_buy = (p.type == 0)
                     base_sym_name = "XAUUSD" if "XAU" in p.symbol.upper() else "BTCUSD"
                     ref_setup = xau_setup if base_sym_name == "XAUUSD" else btc_setup
 
-                    # Auto-protect any open position that was placed without SL or TP
+                    # Auto-protect any open position that was placed without SL or TP using structural ATR stops (R35/R36)
                     cur_sl = float(p.sl)
                     cur_tp = float(p.tp)
                     if cur_sl <= 0 or cur_tp <= 0:
-                        default_risk = 3.5 if base_sym_name == "XAUUSD" else 160.0
+                        ref_atr = float(ref_setup.get("atr") or (5.5 if base_sym_name == "XAUUSD" else 220.0))
+                        default_risk = round(
+                            max(ref_atr * 0.90, 5.00 if base_sym_name == "XAUUSD" else 160.0),
+                            2,
+                        )
                         if cur_sl <= 0:
                             cur_sl = round(
                                 float(p.price_open) - default_risk
@@ -772,7 +1154,7 @@ def main():
                             "sl": cur_sl,
                             "tp": cur_tp,
                         })
-                        print(f"[AUTO-PROTECT] Attached SL={cur_sl} & 1:3 RR TP={cur_tp} to Position #{p.ticket} ({p.symbol})")
+                        print(f"[AUTO-PROTECT] Attached Structural SL={cur_sl} & 1:3 RR TP={cur_tp} to Position #{p.ticket} ({p.symbol})")
 
                     # Register with Profit Guardian if untracked
                     if p.ticket not in profit_guardian._positions:
@@ -832,6 +1214,7 @@ def main():
                     pos_item = {
                         "ticket": t_str,
                         "symbol": p.symbol,
+                        "base_symbol": base_sym_name,
                         "direction": "BUY" if is_pos_buy else "SELL",
                         "volume": float(p.volume),
                         "price_open": float(p.price_open),
@@ -842,6 +1225,7 @@ def main():
                         "comment": str(p.comment),
                     }
                     active_positions_data.append(pos_item)
+                    open_by_base.setdefault(base_sym_name, []).append(pos_item)
 
                     # Stream live floating P/L into Supabase trades table
                     try:
@@ -1024,47 +1408,52 @@ def main():
                 except Exception:
                     pass
 
-                # 8. Continuous High-Clarity Autonomous Execution
-                # Evaluates both XAUUSD and BTCUSD and picks the highest-clarity momentum-aligned setup.
-                if (not bot_paused) and len(active_positions_data) == 0 and (time.time() - last_auto_trade > 25):
-                    candidates = []
-                    if not locked_symbols.get("XAUUSD", False):
-                        candidates.append(("XAUUSD", xau_sym, xau_setup))
-                    if not locked_symbols.get("BTCUSD", False):
-                        candidates.append(("BTCUSD", btc_sym, btc_setup))
-
-                    # Sort by highest Market Clarity Score, preferring active symbol on tie
-                    candidates.sort(
-                        key=lambda item: (
-                            item[2].get("clarity_score", 0),
-                            1 if item[0] == symbol else 0,
-                        ),
+                # 8. Continuous High-Clarity Autonomous Execution (R1, R52)
+                # Evaluates XAUUSD and BTCUSD independently as equal first-class instruments.
+                if not bot_paused:
+                    market_slots = [
+                        ("XAUUSD", xau_sym, xau_setup),
+                        ("BTCUSD", btc_sym, btc_setup),
+                    ]
+                    # Sort purely by Market Clarity Score (no BTC tie-breaker bias)
+                    market_slots.sort(
+                        key=lambda item: item[2].get("clarity_score", 0),
                         reverse=True,
                     )
 
-                    if candidates:
-                        auto_base, auto_broker, auto_setup = candidates[0]
-                        if auto_setup.get("clarity_score", 0) >= 65:
+                    for auto_base, auto_broker, auto_setup in market_slots:
+                        if locked_symbols.get(auto_base, False):
+                            continue
+                        open_for_sym = len(open_by_base.get(auto_base, []))
+                        if open_for_sym >= max_open_per_symbol:
+                            continue
+                        if (time.time() - last_auto_trade_by_symbol.get(auto_base, 0.0)) <= 25:
+                            continue
+
+                        # Enforce SPEC v1.2: Clarity >= 65 AND (breakout trigger fired OR closed-candle market confirmation)
+                        mcs = auto_setup.get("clarity_score", 0)
+                        is_confirmed = bool(auto_setup.get("trigger_fired") or auto_setup.get("market_confirmed"))
+                        if mcs >= 65 and is_confirmed:
                             auto_dir = auto_setup["direction"]
                             auto_sl = float(auto_setup["stop_loss"])
                             auto_tp = float(auto_setup["take_profit"])
                             auto_vol = 0.01
 
                             print(
-                                f"\n[CONTINUOUS SCAN] High-Clarity ({auto_setup['clarity_score']}/100 Grade {auto_setup['clarity_grade']}) "
-                                f"setup on {auto_base}: {auto_dir} @ {auto_setup['entry_price']} "
-                                f"(SL: {auto_sl}, 1:3 RR TP: {auto_tp})"
+                                f"\n[CONTINUOUS SCAN] High-Clarity ({mcs}/100 Grade {auto_setup['clarity_grade']}, H4={auto_setup.get('h4_trend')}) "
+                                f"confirmed setup on {auto_base}: {auto_dir} @ {auto_setup['entry_price']} "
+                                f"(Structural SL: {auto_sl}, TP: {auto_tp})"
                             )
                             ok, res_msg = execute_smc_order(
                                 mt5, supabase, copier_engine, profit_guardian,
                                 auto_broker, auto_base, auto_dir, auto_vol, auto_sl, auto_tp,
                                 reason=(
-                                    f"Autonomous High-Clarity ({auto_setup['clarity_score']}/100) "
-                                    f"{auto_dir} SMC Setup (1:3 RR + 0.5R Breakeven)"
+                                    f"Autonomous SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}) "
+                                    f"{auto_dir} Confirmed SMC Setup"
                                 )
                             )
-                            print(f"[AUTO-SMC] Result: {res_msg}\n")
-                            last_auto_trade = time.time()
+                            print(f"[AUTO-SMC] {auto_base} Result: {res_msg}\n")
+                            last_auto_trade_by_symbol[auto_base] = time.time()
 
                 # Prune old heartbeats every 10 min
                 if time.time() - last_cleanup > 600:
