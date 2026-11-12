@@ -70,15 +70,20 @@ def parse_args():
     parser.add_argument("--login", type=int, help="Exness Account Number / MT5 Login")
     parser.add_argument("--password", type=str, help="Exness Trading Password")
     parser.add_argument("--server", type=str, help="Exness MT5 Server (e.g. Exness-MT5Trial9)")
-    parser.add_argument("--symbol", type=str, default="BTCUSD", help="Primary trading symbol (BTCUSD or XAUUSD)")
+    parser.add_argument("--symbol", type=str, default="XAUUSD", help="Primary trading symbol (Default: XAUUSD, Gold only)")
     parser.add_argument("--once", action="store_true", help="Send single heartbeat and snapshot then exit")
     return parser.parse_args()
 
 
+# Strict policy: Bitcoin trading is permanently banned and condemned
+BANNED_SYMBOLS = frozenset({"BTCUSD", "BTCUSDM", "BTC", "BTCUSDT", "BTCUSD.RAW", "BTCUSDC"})
+
+
 def init_supabase():
     try:
-        from supabase import create_client
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
+        from supabase import create_client, ClientOptions
+        opts = ClientOptions(postgrest_client_timeout=10)
+        return create_client(SUPABASE_URL, SUPABASE_KEY, options=opts)
     except Exception as e:
         print(f"[ERROR] Failed to initialize Supabase client: {e}")
         return None
@@ -840,6 +845,10 @@ def execute_smc_order(
     Submits deal order with attached SL and 1:3 RR TP to MT5, copies to sub-accounts,
     registers with ProfitGuardian, and writes to Supabase trades and signals.
     """
+    if "BTC" in base_asset.upper() or "BTC" in broker_symbol.upper():
+        print(f"[POLICY ENFORCEMENT] Refused trade for {base_asset} ({broker_symbol}): Bitcoin is permanently condemned.")
+        return False, "BLOCKED: Bitcoin trading is permanently condemned and disabled."
+
     mt5.symbol_select(broker_symbol, True)
     tick = mt5.symbol_info_tick(broker_symbol)
     if not tick:
@@ -1110,6 +1119,72 @@ def reconcile_closed_deals(mt5, supabase, copier_engine=None, profit_guardian=No
                         last_auto_trade_by_symbol[closed_inst] = 0.0
 
                     print(f"\n[RECONCILED EXIT] Position #{pos_ticket_str} closed on MT5 at {close_px} | PnL: ${pnl_realized:+.2f} ({r_multiple:+.2f}R) -> Vigorous re-scan armed!")
+                    del open_db_trades[pos_ticket_str]
+
+        # 2. Reconcile any remaining DB trade where close_time is null but not in MT5 live positions
+        if open_db_trades:
+            live_tickets = {str(p.ticket) for p in (mt5.positions_get() or ())}
+            for pos_ticket_str, matched_trade in list(open_db_trades.items()):
+                if pos_ticket_str not in live_tickets:
+                    now_dt = datetime.now(timezone.utc)
+                    close_px = float(matched_trade.get("open_price") or 0.0)
+                    pnl_realized = float(matched_trade.get("pnl") or 0.0)
+                    try:
+                        p_deals = mt5.history_deals_get(position=int(pos_ticket_str))
+                        if p_deals:
+                            for d in p_deals:
+                                if d.entry in (1, 2) or (hasattr(mt5, "DEAL_ENTRY_OUT") and d.entry == getattr(mt5, "DEAL_ENTRY_OUT", 1)):
+                                    close_px = float(d.price)
+                                    pnl_realized = round(float(d.profit) + float(getattr(d, "swap", 0.0)), 2)
+                                    now_dt = datetime.fromtimestamp(d.time, tz=timezone.utc)
+                                    break
+                    except Exception:
+                        pass
+
+                    open_px = float(matched_trade.get("open_price") or close_px)
+                    sl_px = float(matched_trade.get("sl") or open_px)
+                    risk_dist = abs(open_px - sl_px)
+                    if risk_dist > 0:
+                        is_buy = matched_trade.get("side") in ("BULLISH", "BUY")
+                        gain = (close_px - open_px) if is_buy else (open_px - close_px)
+                        r_multiple = round(gain / risk_dist, 2)
+                    else:
+                        r_multiple = -1.0 if pnl_realized < 0 else (3.0 if pnl_realized > 0 else 0.0)
+
+                    supabase.table("trades").update({
+                        "close_time": now_dt.isoformat(),
+                        "close_price": close_px,
+                        "pnl": pnl_realized,
+                        "r_multiple": r_multiple,
+                    }).eq("ticket", pos_ticket_str).execute()
+
+                    sig_id = matched_trade.get("signal_id")
+                    if sig_id:
+                        supabase.table("signals").update({
+                            "state": "CLOSED",
+                            "status": "hit_tp_or_sl",
+                            "outcome": "loss" if pnl_realized < 0 else "win",
+                            "closed_at": now_dt.isoformat(),
+                            "r_multiple": r_multiple,
+                        }).eq("id", sig_id).execute()
+
+                    if profit_guardian:
+                        try:
+                            profit_guardian.deregister_position(int(pos_ticket_str))
+                        except Exception:
+                            pass
+
+                    if copier_engine:
+                        try:
+                            copier_engine.sync_position_close(int(pos_ticket_str))
+                        except Exception:
+                            pass
+
+                    if last_auto_trade_by_symbol is not None:
+                        closed_inst = str(matched_trade.get("instrument") or "XAUUSD").upper()
+                        last_auto_trade_by_symbol[closed_inst] = 0.0
+
+                    print(f"\n[LIVE RECONCILIATION] Stale open Position #{pos_ticket_str} reconciled closed at {close_px} | PnL: ${pnl_realized:+.2f}")
                     del open_db_trades[pos_ticket_str]
     except Exception:
         pass
@@ -1566,13 +1641,13 @@ def main():
                         "key": "live_market_data",
                         "value": {
                             "updated_at": datetime.now(timezone.utc).isoformat(),
-                            "active_symbol": symbol,
+                            "active_symbol": "XAUUSD",
                             "bot_status": live_bot_status,
                             "bot_state": live_bot_state,
                             "reasoning": live_bot_reasoning,
                             "open_positions": active_positions_data,
-                            "BTCUSD": btc_setup,
                             "XAUUSD": xau_setup,
+                            "BTCUSD": {"status": "CONDEMNED", "direction": "PERMANENTLY_DISABLED", "clarity_score": 0},
                         },
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }).execute()
@@ -1616,9 +1691,8 @@ def main():
                         f"[{datetime.now().strftime('%H:%M:%S')}] Live #{heartbeat_count} | "
                         f"Balance: ${curr_info.balance:,.2f} | Equity: ${curr_info.equity:,.2f} "
                         f"(Float: ${floating_sum:+.2f}) | Open: {len(active_positions_data)} | "
-                        f"BTC: {btc_setup['bid']} ({btc_setup['direction']} MCS:{btc_setup['clarity_score']}) | "
                         f"Gold: {xau_setup['bid']} ({xau_setup['direction']} MCS:{xau_setup['clarity_score']}) | "
-                        f"State: {live_bot_state}"
+                        f"BTC: CONDEMNED | State: {live_bot_state}"
                     )
 
                 # 7. Check for remote commands from web dashboard
@@ -1656,8 +1730,12 @@ def main():
                                 print(f"[CONTROL] {res_msg}")
 
                             elif cmd_type == "CONFIGURE_MASTER" and payload.get("symbol"):
-                                symbol = payload["symbol"].upper()
-                                res_msg = f"Master active symbol set to {symbol}"
+                                req_s = payload["symbol"].upper()
+                                if "BTC" in req_s:
+                                    res_msg = "ERROR: Bitcoin is permanently condemned and cannot be set as master symbol."
+                                else:
+                                    symbol = "XAUUSD"
+                                    res_msg = f"Master active symbol set to {symbol}"
 
                             elif cmd_type == "REGISTER_CHILD_ACCOUNT":
                                 c_id = int(payload.get("account_id"))
@@ -1678,21 +1756,25 @@ def main():
 
                             elif cmd_type == "EXECUTE_TRADE":
                                 req_sym = payload.get("symbol", symbol).upper()
-                                req_base = "BTCUSD" if "BTC" in req_sym else "XAUUSD"
-                                req_broker = btc_sym if req_base == "BTCUSD" else xau_sym
-                                req_setup = btc_setup if req_base == "BTCUSD" else xau_setup
-                                req_dir = payload.get("direction") or req_setup["direction"]
-                                req_sl = float(payload.get("stop_loss", req_setup["stop_loss"]))
-                                req_tp = float(payload.get("take_profit", req_setup["take_profit"]))
-                                dyn_vol, _, _ = calculate_dynamic_lot_size(
-                                    mt5, req_broker, req_base, float(req_setup["entry_price"]), req_sl, req_setup.get("clarity_grade", "B")
-                                )
-                                req_vol = float(payload.get("volume") or dyn_vol)
-                                ok, res_msg = execute_smc_order(
-                                    mt5, supabase, copier_engine, profit_guardian,
-                                    req_broker, req_base, req_dir, req_vol, req_sl, req_tp,
-                                    reason=payload.get("reason", f"Manual Web Dispatch ({req_vol} Lot)")
-                                )
+                                if "BTC" in req_sym:
+                                    res_msg = "BLOCKED: Bitcoin trading is permanently condemned by user policy."
+                                    print(f"[CONTROL] {res_msg}")
+                                else:
+                                    req_base = "XAUUSD"
+                                    req_broker = xau_sym
+                                    req_setup = xau_setup
+                                    req_dir = payload.get("direction") or req_setup["direction"]
+                                    req_sl = float(payload.get("stop_loss", req_setup["stop_loss"]))
+                                    req_tp = float(payload.get("take_profit", req_setup["take_profit"]))
+                                    dyn_vol, _, _ = calculate_dynamic_lot_size(
+                                        mt5, req_broker, req_base, float(req_setup["entry_price"]), req_sl, req_setup.get("clarity_grade", "B")
+                                    )
+                                    req_vol = float(payload.get("volume") or dyn_vol)
+                                    ok, res_msg = execute_smc_order(
+                                        mt5, supabase, copier_engine, profit_guardian,
+                                        req_broker, req_base, req_dir, req_vol, req_sl, req_tp,
+                                        reason=payload.get("reason", f"Manual Web Dispatch ({req_vol} Lot)")
+                                    )
 
                             elif cmd_type in ("CLOSE_TRADE", "CLOSE_ALL", "KILL"):
                                 if cmd_type == "KILL":
@@ -1707,7 +1789,6 @@ def main():
                                 # Immediately reset cooldown so bot vigorously scans for the next valid entry
                                 if cmd_type != "KILL":
                                     last_auto_trade_by_symbol["XAUUSD"] = 0.0
-                                    last_auto_trade_by_symbol["BTCUSD"] = 0.0
 
                             supabase.table("commands").update({
                                 "status": "done",
@@ -1717,19 +1798,13 @@ def main():
                 except Exception:
                     pass
 
-                # 8. Vigorous Continuous High-Clarity Autonomous Execution & Risk Management (R1, R52, R55-R58)
-                # Immediately after closing a previous order, vigorously scans both XAUUSD and BTCUSD
+                # 8. Vigorous Continuous High-Clarity Autonomous Execution & Risk Management (Gold Only)
+                # Immediately after closing a previous order, vigorously scans XAUUSD
                 # and enters the next valid confirmed setup at the right time with balance-adapted lot sizing.
                 if not bot_paused:
                     market_slots = [
                         ("XAUUSD", xau_sym, xau_setup),
-                        ("BTCUSD", btc_sym, btc_setup),
                     ]
-                    # Sort purely by Market Clarity Score (no BTC tie-breaker bias)
-                    market_slots.sort(
-                        key=lambda item: item[2].get("clarity_score", 0),
-                        reverse=True,
-                    )
 
                     for auto_base, auto_broker, auto_setup in market_slots:
                         if locked_symbols.get(auto_base, False):
@@ -1745,16 +1820,6 @@ def main():
                         mcs = auto_setup.get("clarity_score", 0)
                         is_confirmed = bool(auto_setup.get("trigger_fired") or auto_setup.get("market_confirmed"))
                         if mcs >= 65 and is_confirmed:
-                            other_sym = "BTCUSD" if auto_base == "XAUUSD" else "XAUUSD"
-                            other_open_list = open_by_base.get(other_sym, [])
-                            other_unprotected = False
-                            for op in other_open_list:
-                                op_t = int(op["ticket"])
-                                st = profit_guardian._positions.get(op_t)
-                                if not (st and st.breakeven_activated):
-                                    other_unprotected = True
-                                    break
-
                             auto_dir = auto_setup["direction"]
                             auto_sl = float(auto_setup["stop_loss"])
                             auto_tp = float(auto_setup["take_profit"])
@@ -1765,7 +1830,7 @@ def main():
                                 float(auto_setup["entry_price"]),
                                 auto_sl,
                                 auto_setup.get("clarity_grade", "B"),
-                                other_pair_unprotected=other_unprotected,
+                                other_pair_unprotected=False,
                             )
 
                             print(

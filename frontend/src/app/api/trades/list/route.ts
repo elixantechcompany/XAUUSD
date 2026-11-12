@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       }).catch(() => null),
     ]);
 
-    let trades: Record<string, unknown>[] = [];
+    let cachedTrades: Record<string, unknown>[] = [];
     if (res.ok) {
       trades = (await res.json()) || [];
     }
@@ -30,14 +30,17 @@ export async function GET(request: NextRequest) {
     if (marketRes?.ok) {
       try {
         const marketData = await marketRes.json();
-        const livePositions: Record<string, unknown>[] = marketData?.[0]?.value?.open_positions || [];
+        const liveMarketObj = marketData?.[0]?.value || {};
+        const livePositions: Record<string, unknown>[] = liveMarketObj.open_positions || [];
+        const isMt5Live = Boolean(liveMarketObj.updated_at);
         const liveTickets = new Set(livePositions.map((p) => String(p.ticket)));
 
-        // 1. Update existing DB trades & mark any stale DB trades not in live MT5 positions as closed if MT5 is live
+        // 1. Reconcile existing DB trades with live MT5 telemetry
         trades = trades.map((t: Record<string, unknown>) => {
+          const tTicket = String(t.ticket);
           if (!t.close_time) {
             const live = livePositions.find(
-              (p: Record<string, unknown>) => String(p.ticket) === String(t.ticket)
+              (p: Record<string, unknown>) => String(p.ticket) === tTicket
             );
             if (live) {
               return {
@@ -46,23 +49,29 @@ export async function GET(request: NextRequest) {
                 sl:  live.sl != null && Number(live.sl) > 0 ? Number(live.sl) : t.sl,
                 tp:  live.tp != null && Number(live.tp) > 0 ? Number(live.tp) : t.tp,
                 open_price: live.price_open != null ? Number(live.price_open) : t.open_price,
+                current_price: live.price_current != null ? Number(live.price_current) : t.current_price,
                 lots: live.volume != null ? Number(live.volume) : t.lots,
+              };
+            } else if (isMt5Live) {
+              // MT5 is actively reporting but this ticket is NOT in live positions -> it has closed!
+              return {
+                ...t,
+                close_time: new Date().toISOString(),
               };
             }
           }
           return t;
         });
 
-        // 2. Inject any live MT5 open position (e.g. placed from MT5 mobile phone or missing FK in DB)
-        //    that isn't already represented as an open trade in `trades`!
-        const existingOpenTickets = new Set(
+        // 2. Inject any live MT5 open position (e.g. placed from MT5 mobile or pending DB sync)
+        const openTicketsInList = new Set(
           trades.filter((t) => !t.close_time).map((t) => String(t.ticket))
         );
 
         const synthesizedLiveTrades: Record<string, unknown>[] = [];
         for (const p of livePositions) {
           const pTicket = String(p.ticket);
-          if (!existingOpenTickets.has(pTicket)) {
+          if (!openTicketsInList.has(pTicket)) {
             const rawSym = String(p.base_symbol || p.symbol || "XAUUSD").toUpperCase();
             const inst = rawSym.includes("BTC") ? "BTCUSD" : "XAUUSD";
             if (instrument && inst !== instrument.toUpperCase()) continue;

@@ -18,11 +18,14 @@ export default function TradesPage() {
   const fetchTradesList = useCallback(async () => {
     try {
       const data = await getTrades({ limit: 200 });
-      setTrades(data);
+      if (Array.isArray(data)) {
+        setTrades(data);
+      }
       setError(null);
     } catch (e: unknown) {
+      // Keep existing trades so intermittent network blips do not cause UI flickering
       const msg = e instanceof Error ? e.message : "Failed to load trades";
-      setError(msg);
+      console.warn("Poll trades notice:", msg);
     } finally {
       setLoading(false);
     }
@@ -218,7 +221,7 @@ export default function TradesPage() {
               <tr>
                 <td colSpan={10} className="px-4 py-12 text-center text-text-secondary text-sm">
                   {tab === "open"
-                    ? "No open positions active on MT5. The bot is actively scanning for 1:3 RR setups."
+                    ? "No open positions active on MT5. The bot is actively scanning Gold (XAUUSD) for institutional 1:3 RR setups."
                     : "No closed trades recorded in history."}
                 </td>
               </tr>
