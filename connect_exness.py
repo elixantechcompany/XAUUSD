@@ -1042,6 +1042,26 @@ def execute_three_order_smc_setup(
     equity = float(acct.equity)
     free_margin = float(getattr(acct, "margin_free", equity))
 
+    mt5.symbol_select(broker_symbol, True)
+    tick = mt5.symbol_info_tick(broker_symbol)
+    if not tick:
+        return False, f"Could not fetch tick for {broker_symbol}", []
+
+    is_buy = direction.upper() in ("BUY", "BULLISH")
+    order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+    curr_entry = float(tick.ask if is_buy else tick.bid)
+
+    sym_info = mt5.symbol_info(broker_symbol)
+    tick_sz = float(sym_info.trade_tick_size or sym_info.point or 0.001) if sym_info else 0.001
+    tick_val = float(sym_info.trade_tick_value or 0.1) if sym_info else 0.1
+    contract_mult = float(sym_info.trade_contract_size or 100.0) if sym_info else 100.0
+
+    calc_margin = None
+    try:
+        calc_margin = mt5.order_calc_margin(order_type, broker_symbol, round(common_volume * 3.0, 2), curr_entry)
+    except Exception:
+        pass
+
     # 1. Prepare and validate three-order plan using ThreeOrderExecutor
     if not three_order_executor:
         three_order_executor = ThreeOrderExecutor()
@@ -1050,24 +1070,21 @@ def execute_three_order_smc_setup(
         setup_id=setup_id,
         symbol=broker_symbol,
         direction=direction,
-        entry_price=0.0,
+        entry_price=curr_entry,
         sl_price=sl,
         tp_price=tp,
         common_lot_size=common_volume,
         account_equity=equity,
         account_free_margin=free_margin,
+        tick_value=tick_val,
+        tick_size=tick_sz,
+        contract_multiplier=contract_mult,
+        broker_margin_needed=calc_margin,
     )
     if not ok_plan or not group:
         print(f"[RISK REJECTION] 3-Order Setup {setup_id} rejected: {plan_msg}")
         return False, plan_msg, []
 
-    mt5.symbol_select(broker_symbol, True)
-    tick = mt5.symbol_info_tick(broker_symbol)
-    if not tick:
-        return False, f"Could not fetch tick for {broker_symbol}", []
-
-    is_buy = direction.upper() in ("BUY", "BULLISH")
-    order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
     filling = determine_filling_type(mt5, broker_symbol)
 
     placed_tickets: list[int] = []

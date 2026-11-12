@@ -169,6 +169,7 @@ class ThreeOrderExecutor:
         tick_size: float = 0.01,
         contract_multiplier: float = 100.0,
         max_risk_pct: float = 1.25,
+        broker_margin_needed: Optional[float] = None,
     ) -> tuple[bool, Optional[ThreeOrderExecutionGroup], str]:
         """
         Creates the ThreeOrderExecutionGroup after verifying combined exposure.
@@ -187,8 +188,15 @@ class ThreeOrderExecutor:
         risk_per_order = round(common_lot_size * risk_per_lot, 2)
         total_combined_risk = round(total_combined_volume * risk_per_lot, 2)
 
-        # Validate against account equity risk ceiling (e.g. 1.25% max total)
-        allowed_max_risk_usd = round(account_equity * (max_risk_pct / 100.0) * 1.05, 2)
+        # Validate against account equity risk ceiling:
+        # Standard accounts (>= $500): strictly enforce max_risk_pct (e.g. 1.25%).
+        # Micro accounts (< $500): allow minimum lot (0.01) if combined risk <= 35% equity (max $15.0).
+        if account_equity >= 500.0:
+            allowed_max_risk_usd = round(account_equity * (max_risk_pct / 100.0) * 1.05, 2)
+        else:
+            micro_limit = min(account_equity * 0.35, 15.0)
+            allowed_max_risk_usd = max(round(account_equity * (max_risk_pct / 100.0) * 1.05, 2), micro_limit)
+
         if total_combined_risk > allowed_max_risk_usd and allowed_max_risk_usd > 0:
             return False, None, (
                 f"Combined exposure rejection: 3 orders of {common_lot_size} lots = {total_combined_volume} lots. "
@@ -196,8 +204,10 @@ class ThreeOrderExecutor:
                 f"({max_risk_pct}% of equity ${account_equity:.2f})."
             )
 
-        # Margin safety check: combined orders must not exceed 25% of free margin
-        est_margin_needed = total_combined_volume * (entry_price * contract_multiplier) / 100.0  # Conservative estimate
+        # Margin safety check: combined orders must not exceed safe allowance of free margin
+        est_margin_needed = broker_margin_needed if (broker_margin_needed is not None and broker_margin_needed > 0) else (
+            total_combined_volume * (entry_price * contract_multiplier) / 1000.0
+        )
         if account_free_margin > 0 and est_margin_needed > (account_free_margin * 0.35):
             return False, None, (
                 f"Insufficient margin for 3 orders: requires ~${est_margin_needed:.2f} margin "
