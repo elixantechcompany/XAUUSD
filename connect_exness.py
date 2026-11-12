@@ -57,6 +57,22 @@ from src.strategy.strategy_core import (
 )
 from src.strategy.structural_tp import StructuralTPDetector
 from src.utils.credentials import CredentialManager, BrokerCredentials
+from src.execution.position_manager import (
+    PositionManagementEngine,
+    BreakEvenMode,
+    PositionBreakEvenState,
+)
+from src.execution.three_order_executor import (
+    ThreeOrderExecutor,
+    OrderExecutionState,
+    SingleOrderSpec,
+    ThreeOrderExecutionGroup,
+)
+from src.services.account_state_service import (
+    AccountStateService,
+    NormalizedAccountState,
+    NormalizedPosition,
+)
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://bntqfzopbbeosruzjxbw.supabase.co")
 SUPABASE_KEY = os.environ.get(
@@ -781,6 +797,7 @@ def calculate_dynamic_lot_size(
         risk_pct = 0.75
     else:
         risk_pct = 1.25 if str(clarity_grade).upper() == "A" else 1.00
+    # Target risk budget for the setup (1.0% or 1.25% of equity)
     target_risk_usd = effective_capital * (risk_pct / 100.0)
 
     sl_dist = abs(float(entry_price) - float(sl_price))
@@ -800,27 +817,30 @@ def calculate_dynamic_lot_size(
 
     ticks_at_risk = sl_dist / tick_size if tick_size > 0 else sl_dist
     risk_per_lot = ticks_at_risk * tick_value
-    # Fallback contract multiplier check if broker reports tick_value=0 before market tick
     if risk_per_lot <= 0:
         contract_mult = 100.0 if "XAU" in base_asset.upper() else 1.0
         risk_per_lot = sl_dist * contract_mult
 
-    raw_volume = target_risk_usd / risk_per_lot if risk_per_lot > 0 else vol_min
-    steps = math.floor(round(raw_volume / vol_step, 6)) if vol_step > 0 else 1
+    # For 3-order structure: each order takes 1/3 of the total setup risk budget
+    # so that all 3 orders combined respect the intended risk target.
+    raw_volume_per_order = (target_risk_usd / 3.0) / risk_per_lot if risk_per_lot > 0 else vol_min
+    steps = math.floor(round(raw_volume_per_order / vol_step, 6)) if vol_step > 0 else 1
     volume = round(steps * vol_step, 2)
 
-    # Ensure at least minimum broker volume (0.01) and cap to safe institutional ceiling
+    # Ensure broker minimum volume (0.01) and cap to safe institutional ceiling
     max_safe_lot = max(vol_min, min(vol_max, round((effective_capital / 150.0) * 0.05, 2)))
     volume = max(vol_min, min(volume, max_safe_lot))
 
-    # Free Margin Safety Check: ensure required margin never exceeds 25% of free margin
+    # Free Margin Safety Check for ALL THREE orders combined (3 * volume)
+    combined_volume = round(volume * 3.0, 2)
     free_margin = float(getattr(acct, "margin_free", effective_capital))
     if free_margin > 0:
         try:
-            req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
+            req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, combined_volume, float(entry_price))
             while req_margin and req_margin > (free_margin * 0.25) and volume > vol_min:
                 volume = round(max(vol_min, volume - vol_step), 2)
-                req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
+                combined_volume = round(volume * 3.0, 2)
+                req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, combined_volume, float(entry_price))
         except Exception:
             pass
 
@@ -987,6 +1007,223 @@ def execute_smc_order(
 
     copy_msg = f" (Mirrored to {copied_count} sub-account(s))" if copied_count > 0 else ""
     return True, f"Ticket #{ticket_str} placed successfully on Exness MT5{copy_msg}"
+
+
+def execute_three_order_smc_setup(
+    mt5,
+    supabase,
+    copier_engine: MultiAccountCopier | None,
+    profit_guardian: ProfitGuardian | None,
+    position_manager: PositionManagementEngine | None,
+    three_order_executor: ThreeOrderExecutor | None,
+    broker_symbol: str,
+    base_asset: str,
+    direction: str,
+    common_volume: float,
+    sl: float,
+    tp: float,
+    setup_id: str,
+    reason: str = "SMC 3-Order Execution 1:3 RR",
+) -> tuple[bool, str, list[int]]:
+    """
+    MASTER DIRECTIVE PART 4:
+    Executes THREE SEPARATE ORDERS for an approved setup using the EXACT SAME
+    calculated dynamic lot size. Each order receives a unique ticket, separate
+    SL/TP, independent break-even tracking, and independent profit/loss tracking.
+    """
+    if "BTC" in base_asset.upper() or "BTC" in broker_symbol.upper():
+        print(f"[POLICY ENFORCEMENT] Refused trade for {base_asset} ({broker_symbol}): Bitcoin is permanently condemned.")
+        return False, "BLOCKED: Bitcoin trading is permanently condemned and disabled.", []
+
+    acct = mt5.account_info()
+    if not acct:
+        return False, "Failed to query MT5 account info", []
+
+    equity = float(acct.equity)
+    free_margin = float(getattr(acct, "margin_free", equity))
+
+    # 1. Prepare and validate three-order plan using ThreeOrderExecutor
+    if not three_order_executor:
+        three_order_executor = ThreeOrderExecutor()
+
+    ok_plan, group, plan_msg = three_order_executor.prepare_three_order_plan(
+        setup_id=setup_id,
+        symbol=broker_symbol,
+        direction=direction,
+        entry_price=0.0,
+        sl_price=sl,
+        tp_price=tp,
+        common_lot_size=common_volume,
+        account_equity=equity,
+        account_free_margin=free_margin,
+    )
+    if not ok_plan or not group:
+        print(f"[RISK REJECTION] 3-Order Setup {setup_id} rejected: {plan_msg}")
+        return False, plan_msg, []
+
+    mt5.symbol_select(broker_symbol, True)
+    tick = mt5.symbol_info_tick(broker_symbol)
+    if not tick:
+        return False, f"Could not fetch tick for {broker_symbol}", []
+
+    is_buy = direction.upper() in ("BUY", "BULLISH")
+    order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+    filling = determine_filling_type(mt5, broker_symbol)
+
+    placed_tickets: list[int] = []
+    failed_orders: list[str] = []
+
+    print("\n" + "=" * 65)
+    print(f"  [EXECUTING 3-ORDER SETUP] {base_asset} {direction} (Group: {group.group_id})")
+    print(f"  Common Dynamic Lot Size : {common_volume} Lots per order (x3 = {group.total_volume} Lots)")
+    print(f"  Combined Risk USD       : ${group.total_combined_risk_usd:.2f} ({equity:,.2f} Equity)")
+    print(f"  Initial Stops           : SL={sl} | TP={tp} (1:3 RR)")
+    print("=" * 65)
+
+    def _submit_single_order(ord_spec: SingleOrderSpec) -> tuple[bool, Optional[int], Optional[float], Optional[int], str]:
+        t_tick = mt5.symbol_info_tick(broker_symbol)
+        curr_px = t_tick.ask if is_buy else t_tick.bid
+        s_dist = abs(float(curr_px) - float(sl))
+        adj_sl = sl
+        adj_tp = tp
+        if is_buy and float(adj_sl) >= float(curr_px):
+            adj_sl = round(float(curr_px) - s_dist, 2)
+        elif not is_buy and float(adj_sl) <= float(curr_px):
+            adj_sl = round(float(curr_px) + s_dist, 2)
+        if is_buy and float(adj_tp) <= float(curr_px):
+            adj_tp = round(float(curr_px) + s_dist * 3.0, 2)
+        elif not is_buy and float(adj_tp) >= float(curr_px):
+            adj_tp = round(float(curr_px) - s_dist * 3.0, 2)
+
+        req = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": broker_symbol,
+            "volume": float(ord_spec.volume),
+            "type": order_type,
+            "price": float(curr_px),
+            "sl": round(float(adj_sl), 2),
+            "tp": round(float(adj_tp), 2),
+            "deviation": 30,
+            "magic": 101001,
+            "comment": f"SMC_ord{ord_spec.order_index}"[:31],
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": filling,
+        }
+        res = mt5.order_send(req)
+        if res is None:
+            return False, None, None, None, f"order_send returned None ({mt5.last_error()})"
+        if res.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+            return False, None, None, res.retcode, f"{res.comment} (code={res.retcode})"
+        return True, int(res.order), float(res.price), res.retcode, "OK"
+
+    three_order_executor.execute_group(group, _submit_single_order)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for ord_spec in group.orders:
+        if ord_spec.state == OrderExecutionState.FILLED and ord_spec.broker_ticket:
+            t_num = ord_spec.broker_ticket
+            placed_tickets.append(t_num)
+            t_str = str(t_num)
+            sig_id = f"sig_{base_asset.lower()}_{t_str}"
+
+            if position_manager:
+                position_manager.register_position(
+                    ticket=t_num,
+                    symbol=broker_symbol,
+                    direction="BUY" if is_buy else "SELL",
+                    volume=ord_spec.volume,
+                    entry_price=float(ord_spec.fill_price or ord_spec.entry_price),
+                    sl=ord_spec.sl_price,
+                    tp=ord_spec.tp_price,
+                    setup_id=setup_id,
+                    group_id=group.group_id,
+                    order_index=ord_spec.order_index,
+                    mode=BreakEvenMode.ADAPTIVE,
+                )
+
+            if profit_guardian:
+                profit_guardian.register_position(
+                    ticket=t_num,
+                    symbol=broker_symbol,
+                    direction="BULLISH" if is_buy else "BEARISH",
+                    entry_price=float(ord_spec.fill_price or ord_spec.entry_price),
+                    sl=float(ord_spec.sl_price),
+                    tp=float(ord_spec.tp_price),
+                )
+
+            if copier_engine:
+                try:
+                    m_pos = MT5Position(
+                        ticket=t_num,
+                        symbol=broker_symbol,
+                        direction="BULLISH" if is_buy else "BEARISH",
+                        volume=float(ord_spec.volume),
+                        entry_price=float(ord_spec.fill_price or ord_spec.entry_price),
+                        current_price=float(ord_spec.fill_price or ord_spec.entry_price),
+                        sl=float(ord_spec.sl_price),
+                        tp=float(ord_spec.tp_price),
+                        pnl=0.0,
+                        swap=0.0,
+                        magic=101001,
+                        comment=f"SMC_{group.group_id[-6:]}_{ord_spec.order_index}",
+                        opened_at=datetime.now(timezone.utc),
+                    )
+                    copier_engine.copy_order(m_pos, sig_id)
+                except Exception:
+                    pass
+
+            try:
+                supabase.table("signals").upsert({
+                    "id": sig_id,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "instrument": base_asset,
+                    "timeframe": "H1",
+                    "direction": "BULLISH" if is_buy else "BEARISH",
+                    "state": "POSITION_OPEN",
+                    "status": "taken",
+                    "entry": float(ord_spec.fill_price or ord_spec.entry_price),
+                    "stop_loss": float(ord_spec.sl_price),
+                    "take_profit": float(ord_spec.tp_price),
+                    "suggested_lot_size": float(ord_spec.volume),
+                    "estimated_risk_usd": round(ord_spec.volume * abs(ord_spec.entry_price - ord_spec.sl_price) * (100 if "XAU" in base_asset else 1), 2),
+                    "rr_ratio": 3.0,
+                    "rejection_reason": f"Order {ord_spec.order_index}/3 of Group {group.group_id}",
+                    "strategy_version": "1.2",
+                }).execute()
+
+                supabase.table("trades").upsert({
+                    "ticket": t_str,
+                    "signal_id": sig_id,
+                    "source": "bot",
+                    "instrument": base_asset,
+                    "side": "BULLISH" if is_buy else "BEARISH",
+                    "lots": float(ord_spec.volume),
+                    "open_time": now_iso,
+                    "open_price": float(ord_spec.fill_price or ord_spec.entry_price),
+                    "sl": float(ord_spec.sl_price),
+                    "tp": float(ord_spec.tp_price),
+                    "execution_mode": "demo",
+                    "pnl": 0.0,
+                }).execute()
+            except Exception:
+                pass
+        else:
+            failed_orders.append(f"Order #{ord_spec.order_index}: {ord_spec.error_message}")
+
+    filled_count = len(placed_tickets)
+    if filled_count == 3:
+        msg = f"All 3 orders executed successfully on Exness MT5: Tickets {placed_tickets} ({common_volume} lots each)"
+        print(f"  [SUCCESS] {msg}\n")
+        return True, msg, placed_tickets
+    elif filled_count > 0:
+        msg = f"Partial 3-order execution: {filled_count}/3 orders filled (Tickets {placed_tickets}). Failures: {failed_orders}"
+        print(f"  [PARTIAL EXECUTION] {msg}\n")
+        return True, msg, placed_tickets
+    else:
+        msg = f"All 3 orders failed execution. Failures: {failed_orders}"
+        print(f"  [FAILED] {msg}\n")
+        return False, msg, []
 
 
 def close_position_mt5(mt5, supabase, copier_engine=None, profit_guardian=None, ticket=None, symbol_name=None, close_reason="CLOSE_SMC"):
@@ -1306,11 +1543,15 @@ def main():
     btc_sym = resolve_broker_symbol(mt5, "BTCUSD")
     xau_sym = resolve_broker_symbol(mt5, "XAUUSD")
 
-    # Initialize Execution, Copier & Profit Guardian with Early Breakeven (0.50R) & Profit Harvester
+    # Initialize Execution, Copier, Position Management & Profit Guardian
     cred_mgr = CredentialManager()
     master_creds = BrokerCredentials(account_id=info.login, password="", server=info.server)
     master_executor = MT5Executor(credentials=master_creds)
     copier_engine = MultiAccountCopier(master_executor=master_executor)
+    position_manager = PositionManagementEngine(default_mode=BreakEvenMode.ADAPTIVE)
+    three_order_executor = ThreeOrderExecutor(max_retries=2)
+    account_state_service = AccountStateService(stale_threshold_seconds=15.0)
+
     profit_guardian = ProfitGuardian(
         master_executor=master_executor,
         copier=copier_engine,
@@ -1329,11 +1570,13 @@ def main():
     print(f"  Server         : {info.server} ({mode})")
     print(f"  Live Balance   : ${info.balance:,.2f} USD")
     print(f"  Live Equity    : ${info.equity:,.2f} USD")
-    print(f"  BTC Symbol     : {btc_sym}")
-    print(f"  Gold Symbol    : {xau_sym}")
+    print(f"  BTC Symbol     : {btc_sym} (PERMANENTLY CONDEMNED)")
+    print(f"  Gold Symbol    : {xau_sym} (PRIMARY ASSET)")
     print(f"  Sub-Accounts   : {len(copier_engine.get_child_accounts())} linked")
+    print("  Execution Mode : 3 SEPARATE ORDERS per setup (Identical Dynamic Lot)")
+    print("  Position Mgr   : Dynamic Break-Even (FIXED_25, FIXED_50, FIXED_70, ADAPTIVE)")
     print("  Profit Guardian: Early Breakeven @ 0.5R | Profit Harvest @ 35% Pullback")
-    print("  Run Mode       : 24/7 IMMORTAL (Runs until paused by user)")
+    print("  Run Mode       : 24/7 IMMORTAL (Continuous Execution)")
     print("=" * 65 + "\n")
 
     try:
@@ -1369,7 +1612,7 @@ def main():
     last_cleanup = time.time()
     last_snapshot = 0.0
     last_auto_trade_by_symbol = {"XAUUSD": 0.0, "BTCUSD": 0.0}
-    max_open_per_symbol = 1
+    max_open_per_symbol = 3  # Master Directive: 3 separate orders per setup
     heartbeat_count = 0
     bot_paused = False
     locked_symbols = {"XAUUSD": False, "BTCUSD": False}
@@ -1576,8 +1819,36 @@ def main():
                         last_auto_trade_by_symbol[base_sym_name] = 0.0
                         continue
 
-                    # Dynamic Trailing Stop Loss & Early Breakeven (0.38R Gold / 0.50R BTC)
+                    # Dynamic Break-Even Management via PositionManagementEngine (PART 1: FIXED_25, FIXED_50, FIXED_70, ADAPTIVE)
                     cur_market_price = float(p.price_current)
+                    sym_info = mt5.symbol_info(p.symbol)
+                    pt_size = float(sym_info.point) if sym_info else 0.01
+                    st_level = float(sym_info.trade_stops_level) if sym_info else 0.0
+                    pm_should_mod, pm_new_sl, pm_reason = position_manager.evaluate_position(
+                        ticket=p.ticket,
+                        current_price=cur_market_price,
+                        point_size=pt_size,
+                        stops_level_points=st_level,
+                        atr=float(ref_setup.get("atr") or 5.0),
+                        spread=float(ref_setup.get("spread_usd") or 0.20),
+                    )
+                    if pm_should_mod and pm_new_sl is not None:
+                        sltp_req = {
+                            "action": mt5.TRADE_ACTION_SLTP,
+                            "position": p.ticket,
+                            "symbol": p.symbol,
+                            "sl": float(pm_new_sl),
+                            "tp": cur_tp,
+                        }
+                        res_be = mt5.order_send(sltp_req)
+                        accepted_be = (res_be is not None and res_be.retcode in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED))
+                        err_be = str(res_be.comment) if res_be else str(mt5.last_error())
+                        position_manager.record_modification_result(p.ticket, accepted_be, pm_new_sl, err_be)
+                        if accepted_be:
+                            cur_sl = float(pm_new_sl)
+                            print(f"\n[DYNAMIC BREAK-EVEN] Position #{p.ticket}: {pm_reason} -> SL updated to {cur_sl}")
+
+                    # Dynamic Trailing Stop Loss & Early Breakeven (0.38R Gold / 0.50R BTC)
                     should_mod, new_sl, reason = profit_guardian.update_price(p.ticket, cur_market_price)
                     if should_mod and new_sl is not None:
                         ok_sl = profit_guardian.apply_broker_sl(p.ticket, new_sl, tp_override=cur_tp)
@@ -1635,7 +1906,23 @@ def main():
                     live_bot_state = active_setup["status_state"]
                     live_bot_reasoning = active_setup["reasoning"]
 
-                # 4. Publish Live Market & SMC Data into Supabase settings
+                # 4. Authoritative Normalized Account State Service (PART 3)
+                account_state = account_state_service.poll_mt5_account_state(
+                    mt5,
+                    position_manager=position_manager,
+                    closed_trades_today_count=0,
+                    new_trades_today_count=0,
+                )
+                try:
+                    supabase.table("settings").upsert({
+                        "key": "account_state",
+                        "value": account_state.to_dict(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }).execute()
+                except Exception:
+                    pass
+
+                # 4B. Publish Live Market & SMC Data into Supabase settings
                 try:
                     supabase.table("settings").upsert({
                         "key": "live_market_data",
@@ -1833,25 +2120,48 @@ def main():
                                 other_pair_unprotected=False,
                             )
 
+                            setup_id = f"smc_{auto_base.lower()}_{int(time.time())}"
                             print(
                                 f"\n[VIGOROUS SCAN] High-Clarity ({mcs}/100 Grade {auto_setup['clarity_grade']}, H4={auto_setup.get('h4_trend')}) "
-                                f"confirmed setup on {auto_base}: {auto_dir} {auto_vol} LOTS @ {auto_setup['entry_price']} "
-                                f"(Risk: ${risk_usd:.2f} [{risk_pct}% of Balance ${curr_info.balance:,.2f}] | "
+                                f"confirmed setup on {auto_base}: {auto_dir} 3x {auto_vol} LOTS @ {auto_setup['entry_price']} "
+                                f"(Risk: ${risk_usd*3.0:.2f} [{risk_pct}% of Balance ${curr_info.balance:,.2f}] | "
                                 f"Liquidity SL: {auto_sl} | Target Zone TP: {auto_tp} | 50% BE: {auto_setup.get('breakeven_50pct_price')})"
                             )
-                            ok, res_msg = execute_smc_order(
-                                mt5, supabase, copier_engine, profit_guardian,
-                                auto_broker, auto_base, auto_dir, auto_vol, auto_sl, auto_tp,
+                            ok, res_msg, tickets = execute_three_order_smc_setup(
+                                mt5,
+                                supabase,
+                                copier_engine,
+                                profit_guardian,
+                                position_manager,
+                                three_order_executor,
+                                auto_broker,
+                                auto_base,
+                                auto_dir,
+                                auto_vol,
+                                auto_sl,
+                                auto_tp,
+                                setup_id=setup_id,
                                 reason=(
-                                    f"Autonomous SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}, {auto_vol} Lot / {risk_pct}% Risk) "
+                                    f"Autonomous 3-Order SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}, 3x{auto_vol} Lots) "
                                     f"{auto_dir} Confirmed SMC Setup"
-                                )
+                                ),
                             )
-                            print(f"[AUTO-SMC] {auto_base} Result: {res_msg}\n")
+                            print(f"[AUTO-SMC] {auto_base} 3-Order Result: {res_msg}\n")
                             last_auto_trade_by_symbol[auto_base] = time.time()
-                            # Update open_by_base in-memory so second pair knows first pair just opened
                             if ok:
-                                open_by_base.setdefault(auto_base, []).append({"ticket": "0"})
+                                for t_num in tickets:
+                                    open_by_base.setdefault(auto_base, []).append({"ticket": str(t_num)})
+                        else:
+                            # Transparent diagnostic reporting of legitimate waiting conditions (PART 2)
+                            if not has_active_pos and not bot_paused:
+                                live_bot_status = f"SCANNING {auto_base} · WAITING FOR SETUP"
+                                live_bot_state = "ANALYZING"
+                                live_bot_reasoning = (
+                                    f"Analyzing {auto_base}: Market Clarity Score {mcs}/100 (threshold: >=65). "
+                                    f"Trend: {auto_setup.get('h4_trend', 'NEUTRAL')}. "
+                                    f"Confirmation: {'Trigger Pending' if not is_confirmed else 'Confirmed'}. "
+                                    f"Legitimate waiting condition — continuous market scanner active."
+                                )
 
                 # Prune old heartbeats every 10 min
                 if time.time() - last_cleanup > 600:

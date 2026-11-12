@@ -24,12 +24,25 @@ export async function GET() {
     const [hbRes, snapRes, settingsRes] = await Promise.all([
       fetch(`${supabaseUrl}/rest/v1/heartbeats?select=*&order=ts.desc&limit=1`,          { headers, cache: "no-store" }).catch(() => null),
       fetch(`${supabaseUrl}/rest/v1/accounts_snapshot?select=*&order=ts.desc&limit=1`,   { headers, cache: "no-store" }).catch(() => null),
-      fetch(`${supabaseUrl}/rest/v1/settings?select=key,value&key=like.mt5_account_*`,   { headers, cache: "no-store" }).catch(() => null),
+      fetch(`${supabaseUrl}/rest/v1/settings?select=key,value`,                          { headers, cache: "no-store" }).catch(() => null),
     ]);
 
     let terminalOnline = false;
     let liveEquity  = 0.0;
     let liveBalance = 0.0;
+    let liveFreeMargin = 0.0;
+
+    let rows: Array<{ key: string; value: AccountSetting }> = [];
+    if (settingsRes?.ok) rows = await settingsRes.json().catch(() => []);
+
+    const acctStateRow = rows.find(r => r.key === "account_state");
+    const acctState = acctStateRow?.value as Record<string, unknown> | undefined;
+    if (acctState && acctState.connected) {
+      terminalOnline = true;
+      if (acctState.equity != null) liveEquity = Number(acctState.equity);
+      if (acctState.balance != null) liveBalance = Number(acctState.balance);
+      if (acctState.free_margin != null) liveFreeMargin = Number(acctState.free_margin);
+    }
 
     if (hbRes?.ok) {
       const hbData = await hbRes.json().catch(() => []);
@@ -37,8 +50,8 @@ export async function GET() {
         const hb = hbData[0];
         const ageMs = Date.now() - new Date(hb.ts).getTime();
         if (hb.mt5_connected && ageMs < 45_000) terminalOnline = true;
-        if (hb.equity  != null) liveEquity  = Number(hb.equity);
-        if (hb.balance != null) liveBalance = Number(hb.balance);
+        if (liveEquity === 0.0 && hb.equity  != null) liveEquity  = Number(hb.equity);
+        if (liveBalance === 0.0 && hb.balance != null) liveBalance = Number(hb.balance);
       }
     }
 
@@ -50,11 +63,8 @@ export async function GET() {
       }
     }
 
-    let rows: Array<{ key: string; value: AccountSetting }> = [];
-    if (settingsRes?.ok) rows = await settingsRes.json().catch(() => []);
-
     const masterRow = rows.find(r => r.key === "mt5_account_master" || r.value?.is_master);
-    const childRows = rows.filter(r => r !== masterRow);
+    const childRows = rows.filter(r => r !== masterRow && (r.key.startsWith("mt5_account_") || r.value?.account_id));
     const masterVal = masterRow?.value;
     const acctId    = masterVal ? Number(masterVal.account_id || masterVal.login) : 0;
 
@@ -64,11 +74,11 @@ export async function GET() {
       server:      masterVal?.server || "Exness-MT5Trial9",
       balance:     terminalOnline ? liveBalance : (masterVal?.balance ?? 0.0),
       equity:      terminalOnline ? liveEquity  : (masterVal?.equity  ?? 0.0),
-      margin_free: terminalOnline ? liveEquity  : 0.0,
+      margin_free: terminalOnline ? (liveFreeMargin || liveEquity) : 0.0,
       is_master:   true,
       is_active:   masterVal?.is_active ?? (acctId > 0),
       status:      terminalOnline ? "CONNECTED (LIVE IPC)" : acctId > 0 ? "STANDBY" : "NOT CONFIGURED",
-      symbol:      masterVal?.symbol || "BTCUSD",
+      symbol:      masterVal?.symbol || "XAUUSD",
       mode:        masterVal?.mode   || "DEMO",
     };
 

@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       }).catch(() => null),
     ]);
 
-    let cachedTrades: Record<string, unknown>[] = [];
+    let trades: Record<string, unknown>[] = [];
     if (res.ok) {
       trades = (await res.json()) || [];
     }
