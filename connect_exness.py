@@ -1676,8 +1676,6 @@ def main():
                 # 1. Reconcile Closed Trades & SL/TP Hits immediately (and arm vigorous re-entry scan)
                 reconcile_closed_deals(mt5, supabase, copier_engine, profit_guardian, last_auto_trade_by_symbol)
 
-                # 2. Extract live multi-directional setups for both BTC and Gold
-                btc_setup = extract_live_smc_setup(mt5, btc_sym, "BTCUSD")
                 # 2. Extract live multi-directional setups for Gold (Gold only - Bitcoin permanently condemned)
                 xau_setup = extract_live_smc_setup(mt5, xau_sym, "XAUUSD")
                 btc_setup = {
@@ -1688,8 +1686,6 @@ def main():
                     "status_state": "CONDEMNED",
                     "reasoning": "Bitcoin permanently condemned by user policy.",
                 }
-
-                active_setup = btc_setup if symbol == "BTCUSD" else xau_setup
                 active_setup = xau_setup
 
                 # 3. Extract active open positions from MT5 and apply Profit Guardian
@@ -2059,10 +2055,8 @@ def main():
                                 res_msg = "Autonomous entries PAUSED by user. Profit Guardian remains active."
                                 print(f"[CONTROL] {res_msg}")
 
-                            elif cmd_type == "RESUME":
                             elif cmd_type in ("RESUME", "START", "START_ENGINE"):
                                 bot_paused = False
-                                res_msg = "Autonomous entries RESUMED by user."
                                 res_msg = "Autonomous entries STARTED / RESUMED by user."
                                 print(f"[CONTROL] {res_msg}")
 
