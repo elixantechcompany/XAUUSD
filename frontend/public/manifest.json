@@ -1,11 +1,12 @@
 {
-  "name": "BotControl Trading Desk",
-  "short_name": "BotControl",
-  "description": "Multi-Account AI Trading Desk for XAUUSD and BTCUSD",
-  "start_url": "/",
+  "name": "Elixan Quantitative Trading Desk",
+  "short_name": "Elixan Desk",
+  "description": "Institutional Multi-Account Quantitative Trading Desk for Gold (XAUUSD)",
+  "start_url": "/overview",
   "display": "standalone",
-  "background_color": "#0B0F14",
-  "theme_color": "#0B0F14",
+  "orientation": "portrait-primary",
+  "background_color": "#0B0F17",
+  "theme_color": "#0B0F17",
   "icons": [
     {
       "src": "/favicon.ico",

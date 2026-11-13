@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { useBotStore } from "@/lib/store";
+import { sendCommand } from "@/lib/supabase/queries";
 import { GrokEquityCard } from "@/components/dashboard/grok-equity-card";
 import { GrokAgentPipeline } from "@/components/dashboard/grok-agent-pipeline";
 import { GrokActivityFeed } from "@/components/dashboard/grok-activity-feed";
@@ -8,13 +10,16 @@ import { GrokGoalTracker } from "@/components/dashboard/grok-goal-tracker";
 import { InteractiveForecastChart } from "@/components/charts/interactive-forecast-chart";
 import { MarketSessionDetector } from "@/components/signals/market-session-detector";
 import { SignalCard } from "@/components/signals/signal-card";
-import { Activity, Shield, Wifi, WifiOff, Clock, Layers } from "lucide-react";
-import { timeAgo } from "@/lib/utils";
+import { Activity, Shield, Wifi, WifiOff, Clock, Layers, RefreshCw, CheckCircle2 } from "lucide-react";
+import { timeAgo, cn } from "@/lib/utils";
 
 export default function OverviewPage() {
   const heartbeat = useBotStore((s) => s.heartbeat);
   const account   = useBotStore((s) => s.account);
   const signals   = useBotStore((s) => s.signals);
+
+  const [restarting, setRestarting] = useState(false);
+  const [restartMessage, setRestartMessage] = useState<string | null>(null);
 
   const activeSignals = signals.filter((s) =>
     !["CLOSED", "EXPIRED", "INVALIDATED", "REJECTED"].includes(s.state)
@@ -30,6 +35,21 @@ export default function OverviewPage() {
   const dailyPnl = account?.daily_pnl ?? 0;
   const drawdownPct = account?.drawdown_pct ?? 0;
   const openPositions = account?.open_positions_count ?? account?.open_positions ?? 0;
+
+  async function handleRestart() {
+    setRestarting(true);
+    setRestartMessage(null);
+    try {
+      await sendCommand("RESTART", { source: "overview_header" });
+      setRestartMessage("Restart signal dispatched — refreshing state & accounts...");
+      setTimeout(() => setRestartMessage(null), 4000);
+    } catch (err: unknown) {
+      setRestartMessage("Failed to dispatch restart");
+      setTimeout(() => setRestartMessage(null), 4000);
+    } finally {
+      setRestarting(false);
+    }
+  }
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto pb-16">
@@ -48,6 +68,25 @@ export default function OverviewPage() {
           <p className="text-xs text-text-secondary mt-1">
             Systematic SMC quantitative desk with sub-second execution &amp; dynamic risk protection.
           </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {restartMessage && (
+            <span className="text-xs text-emerald-400 font-medium animate-fade-in flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {restartMessage}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={handleRestart}
+            disabled={restarting}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-inner bg-surface border border-border hover:border-emerald-500/40 text-xs font-semibold text-text-primary hover:text-emerald-400 transition-all shadow-xs active:scale-95 disabled:opacity-50 min-h-[40px]"
+            title="Restart trading engine, reload accounts and clear scanning cooldowns"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5 text-emerald-400", restarting && "animate-spin")} />
+            <span>{restarting ? "Restarting..." : "Restart Engine"}</span>
+          </button>
         </div>
       </div>
 

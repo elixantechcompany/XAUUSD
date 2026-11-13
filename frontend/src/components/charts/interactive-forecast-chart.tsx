@@ -50,13 +50,13 @@ interface InteractiveForecastChartProps {
 type SmcStep = "ALL" | "SWEEP" | "FVG" | "RETRACEMENT" | "CONFIRMATION" | "EXECUTION";
 
 export function InteractiveForecastChart({
-  initialInstrument = "BTCUSD",
+  initialInstrument = "XAUUSD",
 }: InteractiveForecastChartProps) {
   const storeSignals = useBotStore((s) => s.signals);
   const heartbeat = useBotStore((s) => s.heartbeat);
   const account = useBotStore((s) => s.account);
 
-  const [instrument, setInstrument] = useState<"XAUUSD" | "BTCUSD">(initialInstrument);
+  const [instrument, setInstrument] = useState<"XAUUSD" | "BTCUSD">("XAUUSD");
   const [chartViewMode, setChartViewMode] = useState<"tradingview" | "smc_matrix">("tradingview");
   const [activeStep, setActiveStep] = useState<SmcStep>("ALL");
   const [isPlayingCycle, setIsPlayingCycle] = useState(false);
@@ -447,62 +447,20 @@ export function InteractiveForecastChart({
           </div>
         </div>
 
-        {/* Chart View Switcher + Instrument Switcher */}
+        {/* Chart View & Asset Readout */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* View Mode Toggle: Interactive TradingView Chart vs SMC Matrix */}
           <div className="flex items-center bg-surface-2 p-1 rounded-inner border border-border">
-            <button
-              type="button"
-              onClick={() => setChartViewMode("tradingview")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded transition-all",
-                chartViewMode === "tradingview"
-                  ? "bg-accent text-white shadow-xs"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
+            <div className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded bg-accent/20 border border-accent/40 text-accent">
               <BarChart2 className="w-3.5 h-3.5" />
-              <span>📈 Live TradingView Chart</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setChartViewMode("smc_matrix")}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded transition-all",
-                chartViewMode === "smc_matrix"
-                  ? "bg-gold text-black shadow-xs font-black"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
-              <Target className="w-3.5 h-3.5" />
-              <span>🎯 SMC Forecast Matrix (Image 1)</span>
-            </button>
+              <span>Real-Time Market Chart</span>
+            </div>
           </div>
 
-          {/* Instrument Switcher & Live Price Readout */}
           <div className="flex items-center bg-surface-2 p-1 rounded-inner border border-border">
-            <button
-              onClick={() => setInstrument("BTCUSD")}
-              className={cn(
-                "px-3 py-1 text-xs font-bold rounded transition-all",
-                instrument === "BTCUSD"
-                  ? "bg-accent text-white shadow-xs"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
-              BTCUSD ({liveSpread} pt spread)
-            </button>
-            <button
-              onClick={() => setInstrument("XAUUSD")}
-              className={cn(
-                "px-3 py-1 text-xs font-bold rounded transition-all",
-                instrument === "XAUUSD"
-                  ? "bg-gold text-black shadow-xs font-black"
-                  : "text-text-secondary hover:text-text-primary"
-              )}
-            >
-              XAUUSD (Gold)
-            </button>
+            <div className="px-3 py-1 text-xs font-bold rounded bg-gold/15 text-gold border border-gold/30 flex items-center gap-1.5">
+              <span>XAUUSD (Spot Gold)</span>
+              <span className="font-mono text-[10px] text-text-secondary">· {liveSpread} pt spread</span>
+            </div>
           </div>
         </div>
       </div>

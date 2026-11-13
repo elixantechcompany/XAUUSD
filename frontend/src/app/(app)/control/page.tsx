@@ -110,6 +110,8 @@ export default function ControlPage() {
         setSuccessMsg("Engine PAUSED: Entry signal generation suspended.");
       } else if (type === "RESUME") {
         setSuccessMsg("Engine RESUMED: Quantitative analysis and execution active.");
+      } else if (type === "RESTART") {
+        setSuccessMsg("Engine RESTARTED: Cooldowns cleared, linked accounts reloaded, scanning active.");
       } else if (type === "KILL") {
         setSuccessMsg("GLOBAL KILL SWITCH ENGAGED: All new submissions halted immediately.");
       }
@@ -151,7 +153,7 @@ export default function ControlPage() {
       <section className="bg-surface border border-border rounded-card p-5 space-y-3">
         <h2 className="text-sm font-semibold text-text-primary">Engine Operational State</h2>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <ConfirmDialog
             title="Pause new entries"
             description="The engine stops generating new entry signals. Open positions and their protective stops are not affected."
@@ -179,6 +181,21 @@ export default function ControlPage() {
             >
               <Play className="w-4 h-4 text-accent" aria-hidden />
               Resume Engine
+            </button>
+          </ConfirmDialog>
+
+          <ConfirmDialog
+            title="Restart Trading Engine"
+            description="Re-synchronizes account balances from MT5, reloads all linked copier accounts, and resets scanning cooldowns immediately."
+            confirmLabel="Restart Engine"
+            onConfirm={() => dispatch("RESTART")}
+          >
+            <button
+              disabled={sending}
+              className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-emerald-500/10 border border-emerald-500/30 rounded font-semibold text-sm text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-40 min-h-[44px]"
+            >
+              <RefreshCw className={cn("w-4 h-4 text-emerald-400", sending && "animate-spin")} aria-hidden />
+              Restart Engine
             </button>
           </ConfirmDialog>
         </div>

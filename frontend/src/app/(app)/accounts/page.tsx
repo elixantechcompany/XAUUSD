@@ -23,19 +23,14 @@ import {
   Loader2, Zap, Power, Trash2, RefreshCw, Copy, Layers, AlertTriangle,
   Check, Settings, Terminal, ArrowRightLeft
 } from "lucide-react";
+import {
+  ALL_EXNESS_SERVERS,
+  EXNESS_DEMO_SERVERS,
+  EXNESS_REAL_SERVERS,
+} from "@/lib/exness-servers";
+import { ServerSelect } from "@/components/ui/server-select";
 
-const EXNESS_SERVERS = [
-  "Exness-MT5Trial12",
-  "Exness-MT5Trial",
-  "Exness-MT5Trial2",
-  "Exness-MT5Trial3",
-  "Exness-MT5Trial4",
-  "Exness-MT5Demo",
-  "Exness-MT5Real",
-  "Exness-MT5Real2",
-  "Exness-MT5Real3",
-  "Exness-MT5Real10",
-];
+const EXNESS_SERVERS = ALL_EXNESS_SERVERS;
 
 interface AccountInfo {
   account_id: number;
@@ -98,7 +93,7 @@ export default function AccountsPage() {
   const [masterPassword, setMasterPassword] = useState("");
   const [masterServer, setMasterServer] = useState(EXNESS_SERVERS[0]); // "Exness-MT5Trial12"
   const [masterCustomServer, setMasterCustomServer] = useState("");
-  const [masterSymbol, setMasterSymbol] = useState<"BTCUSD" | "XAUUSD">("BTCUSD");
+  const [masterSymbol, setMasterSymbol] = useState<"XAUUSD">("XAUUSD");
   const [masterMode, setMasterMode] = useState<"DEMO" | "LIVE">("DEMO");
   const [showMasterPw, setShowMasterPw] = useState(false);
   const [savingMaster, setSavingMaster] = useState(false);
@@ -127,13 +122,8 @@ export default function AccountsPage() {
   const finalServer = server === "custom" ? customServer.trim() : server;
   const finalMasterServer = masterServer === "custom" ? masterCustomServer.trim() : masterServer;
 
-  function applyPreset(type: "DEMO_BTC" | "DEMO_GOLD" | "REAL") {
-    if (type === "DEMO_BTC") {
-      setMasterServer("Exness-MT5Trial12");
-      setMasterSymbol("BTCUSD");
-      setMasterMode("DEMO");
-      setMasterLabel("Exness Demo BTC");
-    } else if (type === "DEMO_GOLD") {
+  function applyPreset(type: "DEMO_GOLD" | "REAL") {
+    if (type === "DEMO_GOLD") {
       setMasterServer("Exness-MT5Trial12");
       setMasterSymbol("XAUUSD");
       setMasterMode("DEMO");
@@ -146,7 +136,7 @@ export default function AccountsPage() {
     }
   }
 
-  function scrollToMasterRegistration(preset?: "DEMO_BTC" | "DEMO_GOLD" | "REAL") {
+  function scrollToMasterRegistration(preset?: "DEMO_GOLD" | "REAL") {
     if (preset) applyPreset(preset);
     setShowMasterModal(true);
     setSuccess(null);
@@ -817,45 +807,24 @@ export default function AccountsPage() {
                   </div>
                 </Field>
 
-                <Field id="master-server" label="Exness Server" hint="Select your broker server (e.g. Exness-MT5Trial12 for Demo)">
-                  <select
+                <Field id="master-server" label="Exness MT5 Server" hint="Select from all official Exness Demo (Trial 1–12) and Real (1–25) servers">
+                  <ServerSelect
                     id="master-server"
                     value={masterServer}
-                    onChange={(e) => setMasterServer(e.target.value)}
-                    className={inputCls}
-                  >
-                    {EXNESS_SERVERS.map((srv) => (
-                      <option key={srv} value={srv}>
-                        {srv} {srv.includes("Trial") || srv.includes("Demo") ? "(Demo / Paper)" : "(Real)"}
-                      </option>
-                    ))}
-                    <option value="custom">Custom Server...</option>
-                  </select>
+                    onChange={(val) => setMasterServer(val)}
+                  />
                 </Field>
 
-                {masterServer === "custom" ? (
-                  <Field id="master-custom-server" label="Custom Server Name">
-                    <input
-                      id="master-custom-server"
-                      type="text"
-                      value={masterCustomServer}
-                      onChange={(e) => setMasterCustomServer(e.target.value)}
-                      placeholder="e.g. Exness-MT5Trial15"
-                      className={inputCls}
-                    />
-                  </Field>
-                ) : (
-                  <Field id="master-label" label="Account Label / Tag">
-                    <input
-                      id="master-label"
-                      type="text"
-                      value={masterLabel}
-                      onChange={(e) => setMasterLabel(e.target.value)}
-                      placeholder="e.g. Exness Demo BTC"
-                      className={inputCls}
-                    />
-                  </Field>
-                )}
+                <Field id="master-label" label="Account Label / Tag">
+                  <input
+                    id="master-label"
+                    type="text"
+                    value={masterLabel}
+                    onChange={(e) => setMasterLabel(e.target.value)}
+                    placeholder="e.g. Exness Demo Gold"
+                    className={inputCls}
+                  />
+                </Field>
               </div>
 
               <div className="flex justify-end gap-3 pt-2">
@@ -953,27 +922,12 @@ export default function AccountsPage() {
                   </div>
                 </Field>
 
-                <Field id="acct-server" label="Broker Server">
-                  <select
+                <Field id="acct-server" label="Exness MT5 Server" hint="Choose from all 12 Demo (Trial) and 25 Real Exness servers">
+                  <ServerSelect
                     id="acct-server"
                     value={server}
-                    onChange={(e) => setServer(e.target.value)}
-                    className={inputCls}
-                  >
-                    {EXNESS_SERVERS.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                    <option value="custom">Custom server…</option>
-                  </select>
-                  {server === "custom" && (
-                    <input
-                      type="text"
-                      value={customServer}
-                      onChange={(e) => setCustom(e.target.value)}
-                      placeholder="e.g. Exness-MT5Real11"
-                      className={cn(inputCls, "mt-2")}
-                    />
-                  )}
+                    onChange={(val) => setServer(val)}
+                  />
                 </Field>
 
                 <Field id="acct-multiplier" label="Risk Multiplier" hint="1.0x = exact 1.0% risk of this account balance.">
@@ -1051,25 +1005,25 @@ export default function AccountsPage() {
             <Skeleton className="h-4 w-72" />
           </div>
         ) : !master?.account_id ? (
-          <div className="bg-gradient-to-r from-amber-500/10 via-surface to-surface border-2 border-amber-500/30 rounded-card p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="bg-gradient-to-r from-gold/10 via-surface to-surface border-2 border-gold/30 rounded-card p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-inner bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
-                <Server className="w-6 h-6 text-amber-400" />
+              <div className="w-12 h-12 rounded-inner bg-gold/15 border border-gold/30 flex items-center justify-center shrink-0">
+                <Server className="w-6 h-6 text-gold" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-base font-bold text-text-primary">Connect Primary Exness Demo (BTCUSD)</h3>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase">
-                    Ready to Test
+                  <h3 className="text-base font-bold text-text-primary">Connect Primary Exness Demo (Gold XAUUSD)</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gold/20 text-gold border border-gold/40 uppercase">
+                    Ready to Connect
                   </span>
                 </div>
                 <p className="text-xs text-text-secondary mt-1 max-w-xl">
-                  Add your Exness MT5 demo credentials to test the quantitative bot on BTCUSD. The password is saved directly into Windows Credential Manager on your laptop with zero cloud exposure.
+                  Add your Exness MT5 demo credentials to run the autonomous quantitative engine on Gold (XAUUSD). Passwords are encrypted directly inside your local Windows Credential Manager.
                 </p>
               </div>
             </div>
             <button
-              onClick={() => scrollToMasterRegistration("DEMO_BTC")}
+              onClick={() => scrollToMasterRegistration("DEMO_GOLD")}
               className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black font-bold text-sm rounded-inner shrink-0 shadow-md active:scale-95"
             >
               Connect Exness Demo Account
@@ -1104,7 +1058,7 @@ export default function AccountsPage() {
                     </span>
                   </div>
                   <p className="text-xs text-text-secondary mt-1">
-                    Account: <strong className="text-text-primary">{master?.account_id}</strong> · Server: <strong>{master?.server}</strong> · Asset: <strong className="text-accent">{master?.symbol || "BTCUSD"}</strong>
+                    Account: <strong className="text-text-primary">{master?.account_id}</strong> · Server: <strong>{master?.server}</strong> · Asset: <strong className="text-gold">XAUUSD (Gold)</strong>
                   </p>
                 </div>
               </div>
@@ -1132,41 +1086,22 @@ export default function AccountsPage() {
               </div>
             </div>
 
-            {/* Quick Controls: Symbol Toggle & CLI Launch Snippet */}
+            {/* Quick Controls: Symbol Readout & CLI Launch Snippet */}
             <div className="pt-3 border-t border-border/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2">
                 <span className="text-text-secondary font-medium">Target Asset:</span>
-                <button
-                  onClick={() => handleQuickSwitchSymbol("BTCUSD")}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-xs font-semibold border transition-all",
-                    (master?.symbol || "BTCUSD") === "BTCUSD"
-                      ? "bg-accent/20 border-accent text-accent font-bold"
-                      : "bg-surface-2 border-border text-text-secondary hover:text-text-primary"
-                  )}
-                >
-                  BTCUSD (Bitcoin)
-                </button>
-                <button
-                  onClick={() => handleQuickSwitchSymbol("XAUUSD")}
-                  className={cn(
-                    "px-2.5 py-1 rounded text-xs font-semibold border transition-all",
-                    master?.symbol === "XAUUSD"
-                      ? "bg-gold/20 border-gold text-gold font-bold"
-                      : "bg-surface-2 border-border text-text-secondary hover:text-text-primary"
-                  )}
-                >
-                  XAUUSD (Gold)
-                </button>
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-gold/15 text-gold border border-gold/30">
+                  XAUUSD (Gold · 100oz Contract)
+                </span>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="bg-surface-2 border border-border px-2.5 py-1 rounded font-mono text-[11px] text-text-secondary flex items-center gap-1.5">
                   <Terminal className="w-3.5 h-3.5 text-accent" />
-                  <span>python main.py --mode {(master?.mode || "demo").toLowerCase()} --symbol {master?.symbol || "BTCUSD"}</span>
+                  <span>python connect_exness.py --symbol XAUUSD</span>
                 </div>
                 <button
-                  onClick={() => copyCliCommand(`python main.py --mode ${(master?.mode || "demo").toLowerCase()} --symbol ${master?.symbol || "BTCUSD"}`)}
+                  onClick={() => copyCliCommand("python connect_exness.py --symbol XAUUSD")}
                   className="px-2.5 py-1 rounded border border-border bg-surface-2 hover:bg-surface-2/80 text-text-primary font-semibold text-[11px] flex items-center gap-1"
                   title="Copy engine launch command"
                 >

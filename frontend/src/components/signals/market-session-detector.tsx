@@ -149,15 +149,14 @@ export function MarketSessionDetector({ instrument }: { instrument: "XAUUSD" | "
               )}
             />
             <span className="text-xs font-semibold text-text-primary">
-              XAUUSD: {isXauMarketOpen ? "OPEN" : isDailyBreak ? "BREAK" : "WEEKEND"}
+              Gold (XAUUSD): {isXauMarketOpen ? "MARKET OPEN" : isDailyBreak ? "DAILY ROLLOVER BREAK" : "WEEKEND CLOSED"}
             </span>
           </div>
 
-          {/* BTCUSD Status */}
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-inner bg-surface-2 border border-border">
-            <span className="w-2 h-2 rounded-full bg-profit animate-pulse" />
-            <span className="text-xs font-semibold text-text-primary">
-              BTCUSD: 24/7 OPEN
+            <span className="w-2 h-2 rounded-full bg-gold animate-pulse" />
+            <span className="text-xs font-semibold text-gold">
+              SMC Institutional Execution
             </span>
           </div>
         </div>

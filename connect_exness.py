@@ -1185,9 +1185,11 @@ def execute_three_order_smc_setup(
                         comment=f"SMC_{group.group_id[-6:]}_{ord_spec.order_index}",
                         opened_at=datetime.now(timezone.utc),
                     )
-                    copier_engine.copy_order(m_pos, sig_id)
-                except Exception:
-                    pass
+                    copied_recs = copier_engine.copy_order(m_pos, sig_id)
+                    for cr in copied_recs:
+                        print(f"[COPIER] Replicated Order #{ord_spec.order_index}/3 to Sub-Account #{cr.child_account_id}: Ticket #{cr.child_ticket} ({cr.volume} Lots)")
+                except Exception as ce:
+                    print(f"[COPIER ERROR] Failed copying Order #{ord_spec.order_index}/3: {ce}")
 
             try:
                 supabase.table("signals").upsert({
@@ -1473,8 +1475,20 @@ def load_linked_sub_accounts(supabase, cred_mgr: CredentialManager, copier_engin
                     if acct_id:
                         acct_num = int(acct_id)
                         if acct_num not in copier_engine.child_accounts:
-                            creds = cred_mgr.get_credentials(acct_num)
-                            pw = creds.password if creds else ""
+                            pw = ""
+                            try:
+                                import keyring
+                                pw = keyring.get_password(cred_mgr.service_name, f"{acct_num}_child_password") or ""
+                                if not pw:
+                                    pw = keyring.get_password(cred_mgr.service_name, f"{acct_num}_password") or ""
+                            except Exception:
+                                pass
+                            if not pw:
+                                creds = cred_mgr.get_credentials(acct_num)
+                                pw = creds.password if creds else ""
+                            if not pw:
+                                pw = str(v.get("password") or "")
+
                             srv = (v.get("server") or "Exness-MT5Trial10").strip().replace(" ", "-")
                             copier_engine.add_child_account(ChildAccountConfig(
                                 account_id=acct_num,
@@ -2024,6 +2038,13 @@ def main():
                             elif cmd_type == "RESUME":
                                 bot_paused = False
                                 res_msg = "Autonomous entries RESUMED by user."
+                                print(f"[CONTROL] {res_msg}")
+
+                            elif cmd_type in ("RESTART", "RESTART_ENGINE"):
+                                bot_paused = False
+                                last_auto_trade_by_symbol.clear()
+                                load_linked_sub_accounts(supabase, cred_mgr, copier_engine)
+                                res_msg = "Bot Engine successfully RESTARTED. Scanning refreshed, cooldowns cleared, accounts reloaded."
                                 print(f"[CONTROL] {res_msg}")
 
                             elif cmd_type == "NEWS_LOCK":

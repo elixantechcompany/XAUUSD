@@ -3,15 +3,17 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "ELIXAN QUANT — Institutional AI Trading Desk | Gold & Bitcoin",
+    default: "ELIXAN QUANT — Institutional Quantitative Trading Desk | Spot Gold",
     template: "%s | ELIXAN QUANT",
   },
   description:
-    "Autonomous SMC & Fair Value Gap quantitative trading desk for XAUUSD & BTCUSD with single-terminal multi-account trade copying in <200ms.",
+    "Autonomous Smart Money Concepts quantitative trading desk for Gold (XAUUSD) with sub-second execution, dynamic break-even, and fast multi-account replication.",
   manifest: "/manifest.json",
   icons: { icon: "/favicon.ico", apple: "/icons/apple-touch-icon.png" },
   other: {
     "mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-status-bar-style": "black-translucent",
   },
 };
 

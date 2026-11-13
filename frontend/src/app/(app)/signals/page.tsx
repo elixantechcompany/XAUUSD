@@ -19,7 +19,7 @@ import { Sparkles } from "lucide-react";
 import type { Instrument, Signal } from "@/lib/supabase/types";
 import { cn } from "@/lib/utils";
 
-const INSTRUMENTS: (Instrument | "ALL")[] = ["ALL", "XAUUSD", "BTCUSD"];
+const INSTRUMENTS: (Instrument | "ALL")[] = ["ALL", "XAUUSD"];
 const STATUSES = ["ALL", "ACTIVE", "READY", "CLOSED"] as const;
 
 const ACTIVE_STATES = new Set([

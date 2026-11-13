@@ -26,7 +26,7 @@ export function GrokAgentPipeline({
       iconColor: "text-blue-400",
       statusText: activeSignalsCount > 0
         ? `${activeSignalsCount} quantitative setup${activeSignalsCount > 1 ? "s" : ""} active`
-        : "Scanning H1 candles for XAUUSD & BTCUSD",
+        : "Scanning H1/M15 institutional imbalances for XAUUSD (Gold)",
       statusBadge: activeSignalsCount > 0 ? `${activeSignalsCount} ACTIVE` : "SCANNING",
       badgeBg: activeSignalsCount > 0 ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300" : "bg-blue-500/10 border-blue-500/25 text-blue-300",
       inFlight: activeSignalsCount > 0,

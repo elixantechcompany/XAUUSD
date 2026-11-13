@@ -33,16 +33,16 @@ export function GrokEquityCard({
       {/* Top bar with active instruments and status pill */}
       <div className="flex flex-wrap items-center justify-between gap-2 pb-5 border-b border-border">
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-          {/* Symbol 1: Gold */}
+          {/* Primary Asset: Gold */}
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-2 border border-border text-xs">
             <span className="font-bold text-gold">XAUUSD</span>
-            <span className="text-text-secondary font-mono text-[11px]">H1 Imbalance Scanning</span>
+            <span className="text-text-secondary font-mono text-[11px]">H1 Liquidity & Imbalance Engine</span>
           </div>
 
-          {/* Symbol 2: Bitcoin */}
+          {/* Execution Architecture */}
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-2 border border-border text-xs">
-            <span className="font-bold text-amber-500">BTCUSD</span>
-            <span className="text-text-secondary font-mono text-[11px]">24/7 Market Active</span>
+            <span className="font-bold text-emerald-400">3-ORDER SYSTEM</span>
+            <span className="text-text-secondary font-mono text-[11px]">Dynamic Break-Even Armed</span>
           </div>
         </div>
 

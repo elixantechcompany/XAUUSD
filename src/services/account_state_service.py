@@ -273,3 +273,4 @@ class AccountStateService:
 
     def get_latest_state(self) -> Optional[NormalizedAccountState]:
         return self._latest_state
+

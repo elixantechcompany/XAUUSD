@@ -44,7 +44,17 @@ export type Instrument = "XAUUSD" | "BTCUSD";
 export type ExecutionMode = "paper" | "demo";
 export type Session = "Asia" | "London" | "NewYork" | "Overlap";
 export type QualityGrade = "A" | "B" | "C";
-export type CommandType = "PAUSE" | "RESUME" | "NEWS_LOCK" | "KILL" | "CLOSE_ALL";
+export type CommandType =
+  | "PAUSE"
+  | "RESUME"
+  | "NEWS_LOCK"
+  | "KILL"
+  | "CLOSE_ALL"
+  | "RESTART"
+  | "REGISTER_CHILD_ACCOUNT"
+  | "CONFIGURE_MASTER"
+  | "EXECUTE_TRADE"
+  | "CLOSE_TRADE";
 export type CommandStatus = "pending" | "done" | "failed" | "expired";
 
 export interface Heartbeat {
