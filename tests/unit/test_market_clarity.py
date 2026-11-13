@@ -86,10 +86,17 @@ def _bullish_h4_candles() -> list[Candle]:
             volume=100.0, symbol="XAUUSD", timeframe="H4",
         ))
     # Create clear pivot highs and lows
-    # Swing lows: index 2=1981, index 12=1986, index 22=1991 (rising)
+    # Swing lows: index 2=1975, index 12=1980, index 22=1985 (rising)
     for idx, base in [(2, 1975), (12, 1980), (22, 1985)]:
         candles[idx] = Candle(
-            time=_t(idx), open=base + 1, high=base + 8, low=base, close=base + 5,
+            time=_t(idx), open=base + 1, high=base + 4, low=base, close=base + 2,
+            volume=100.0, symbol="XAUUSD", timeframe="H4",
+        )
+    # Swing highs: index 7=2005, index 17=2020 (rising)
+    for idx, hi_level in [(7, 2005.0), (17, 2020.0)]:
+        lo = candles[idx].low
+        candles[idx] = Candle(
+            time=_t(idx), open=lo + 1, high=hi_level, low=lo, close=lo + 2,
             volume=100.0, symbol="XAUUSD", timeframe="H4",
         )
     return candles

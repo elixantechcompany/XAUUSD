@@ -1246,8 +1246,8 @@ class BreakEvenTrailingManager:
         # R90: move SL to exact entry price, rounded conservatively
         new_sl = self._round_to_tick(entry_price, direction, mode="breakeven")
 
-        # R90: check broker minimum stop distance
-        if not self._passes_min_stop(new_sl, best_close, direction):
+        # R90: check broker minimum stop distance from current price
+        if not self._passes_min_stop(new_sl, close_price, direction):
             return StopUpdateResult(
                 False, None,
                 f"Break-even triggered (progress={progress:.3f}) but "

@@ -150,7 +150,7 @@ class ProfitGuardian:
         peak_progress_to_tp = (peak_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
         best_progress = max(progress_to_tp, peak_progress_to_tp)
 
-        # Stage 1A: Systematic Break-Even Protection at 50% of Planned TP (or 1.0R)
+        # Stage 1: Systematic Break-Even Protection at 50% of Planned TP (or 1.0R)
         # Give position full room to develop without choking at 25 cents.
         reached_50pct_of_tp = (best_progress >= 0.50 or floating_r >= max(self.breakeven_r, 1.0))
 
@@ -161,44 +161,21 @@ class ProfitGuardian:
                 proposed_sl = new_be
                 state.breakeven_activated = True
                 reason = (
-                    f"BREAKEVEN_50PCT_TP: Trade reached {best_progress*100:.1f}% "
+                    f"BREAKEVEN: Trade reached {best_progress*100:.1f}% "
                     f"of intended profit target ({floating_r:.2f}R). SL moved to entry + spread buffer."
                 )
 
-        # Stage 1B: At 50% of Intended Profit Target, lock +20% of TP distance in guaranteed profit!
-        if best_progress >= 0.50 and target_profit_dist > 0:
-            lock_50_dist = max(target_profit_dist * 0.20, 0.35 if "XAU" in state.symbol.upper() else 12.0)
-            sl_50_lock = state.entry_price + lock_50_dist if is_bullish else state.entry_price - lock_50_dist
-            if (is_bullish and sl_50_lock > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or sl_50_lock < proposed_sl)):
-                proposed_sl = sl_50_lock
-                state.breakeven_activated = True
-                reason = (
-                    f"BREAKEVEN_50PCT_TP_LOCK: Order reached {best_progress*100:.1f}% of intended profit "
-                    f"({floating_r:.2f}R). SL locked in guaranteed profit at {round(proposed_sl, 2)}."
-                )
-
-        # Stage 1C: At 75% of Intended Profit Target, lock +50% of TP distance in guaranteed profit!
-        if best_progress >= 0.75 and target_profit_dist > 0:
-            lock_75_dist = target_profit_dist * 0.50
-            sl_75_lock = state.entry_price + lock_75_dist if is_bullish else state.entry_price - lock_75_dist
-            if (is_bullish and sl_75_lock > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or sl_75_lock < proposed_sl)):
-                proposed_sl = sl_75_lock
-                reason = (
-                    f"PROFIT_LOCK_75PCT_TP: Order reached {best_progress*100:.1f}% of intended profit "
-                    f"({floating_r:.2f}R). SL ratcheted to 50% of TP ({round(proposed_sl, 2)})."
-                )
-
-        # ── 2. Structural Profit Lock at trailing_start_r and 2.0R ──────────────
+        # ── 2. Structural Profit Lock at trailing_start_r (1.5R) and 2.0R ──────────────
         if floating_r >= 2.0:
             locked_dist = risk_dist * 1.0  # Lock +1.0R
             new_sl = state.entry_price + locked_dist if is_bullish else state.entry_price - locked_dist
-            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or new_sl < proposed_sl)):
+            if _improves_sl(new_sl):
                 proposed_sl = new_sl
                 reason = f"PROFIT_LOCK_2R: Trade reached {floating_r:.2f}R. SL locked at +1.0R profit."
         elif floating_r >= self.trailing_start_r:
             locked_dist = risk_dist * 0.5  # Lock +0.5R
             new_sl = state.entry_price + locked_dist if is_bullish else state.entry_price - locked_dist
-            if (is_bullish and new_sl > proposed_sl) or (not is_bullish and (proposed_sl <= 0 or new_sl < proposed_sl)):
+            if _improves_sl(new_sl):
                 proposed_sl = new_sl
                 reason = f"PROFIT_LOCK_1.5R: Trade reached {floating_r:.2f}R. SL locked at +0.5R profit."
 

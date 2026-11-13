@@ -821,26 +821,23 @@ def calculate_dynamic_lot_size(
         contract_mult = 100.0 if "XAU" in base_asset.upper() else 1.0
         risk_per_lot = sl_dist * contract_mult
 
-    # For 3-order structure: each order takes 1/3 of the total setup risk budget
-    # so that all 3 orders combined respect the intended risk target.
-    raw_volume_per_order = (target_risk_usd / 3.0) / risk_per_lot if risk_per_lot > 0 else vol_min
-    steps = math.floor(round(raw_volume_per_order / vol_step, 6)) if vol_step > 0 else 1
+    # Allocate full setup risk budget (1.0% to 1.25% of equity) to the single clean order
+    raw_volume = target_risk_usd / risk_per_lot if risk_per_lot > 0 else vol_min
+    steps = math.floor(round(raw_volume / vol_step, 6)) if vol_step > 0 else 1
     volume = round(steps * vol_step, 2)
 
     # Ensure broker minimum volume (0.01) and cap to safe institutional ceiling
-    max_safe_lot = max(vol_min, min(vol_max, round((effective_capital / 150.0) * 0.05, 2)))
+    max_safe_lot = max(vol_min, min(vol_max, round((effective_capital / 80.0) * 0.05, 2)))
     volume = max(vol_min, min(volume, max_safe_lot))
 
-    # Free Margin Safety Check for ALL THREE orders combined (3 * volume)
-    combined_volume = round(volume * 3.0, 2)
+    # Free Margin Safety Check for the single order
     free_margin = float(getattr(acct, "margin_free", effective_capital))
     if free_margin > 0:
         try:
-            req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, combined_volume, float(entry_price))
-            while req_margin and req_margin > (free_margin * 0.25) and volume > vol_min:
+            req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
+            while req_margin and req_margin > (free_margin * 0.35) and volume > vol_min:
                 volume = round(max(vol_min, volume - vol_step), 2)
-                combined_volume = round(volume * 3.0, 2)
-                req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, combined_volume, float(entry_price))
+                req_margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, broker_symbol, volume, float(entry_price))
         except Exception:
             pass
 
@@ -859,6 +856,7 @@ def execute_smc_order(
     volume: float,
     sl: float,
     tp: float,
+    position_manager: PositionManagementEngine | None = None,
     reason="SMC Confirmation 1:3 RR",
 ):
     """
@@ -936,6 +934,19 @@ def execute_smc_order(
             tp=float(tp),
         )
         print(f"[GUARDIAN] Position #{ticket_str} registered with Early Breakeven (0.5R) & Profit Harvester")
+
+    if position_manager:
+        position_manager.register_position(
+            ticket=ticket_num,
+            symbol=broker_symbol,
+            direction="BUY" if is_buy else "SELL",
+            volume=float(volume),
+            entry_price=float(res.price),
+            sl=float(sl),
+            tp=float(tp),
+            mode=BreakEvenMode.ADAPTIVE,
+        )
+        print(f"[POSITION MANAGER] Position #{ticket_str} registered with Adaptive Break-Even (50% TP Progress)")
 
     # 2. Multi-Account Copier: Replicate order across connected active sub-accounts
     copied_count = 0
@@ -1643,7 +1654,7 @@ def main():
     last_cleanup = time.time()
     last_snapshot = 0.0
     last_auto_trade_by_symbol = {"XAUUSD": 0.0, "BTCUSD": 0.0}
-    max_open_per_symbol = 3  # Master Directive: 3 separate orders per setup
+    max_open_per_symbol = 1  # User Directive: Single clean order execution per setup
     heartbeat_count = 0
     bot_paused = False
     locked_symbols = {"XAUUSD": False, "BTCUSD": False}
@@ -2135,34 +2146,29 @@ def main():
                             setup_id = f"smc_{auto_base.lower()}_{int(time.time())}"
                             print(
                                 f"\n[VIGOROUS SCAN] High-Clarity ({mcs}/100 Grade {auto_setup['clarity_grade']}, H4={auto_setup.get('h4_trend')}) "
-                                f"confirmed setup on {auto_base}: {auto_dir} 3x {auto_vol} LOTS @ {auto_setup['entry_price']} "
-                                f"(Risk: ${risk_usd*3.0:.2f} [{risk_pct}% of Balance ${curr_info.balance:,.2f}] | "
+                                f"confirmed setup on {auto_base}: {auto_dir} {auto_vol} LOTS @ {auto_setup['entry_price']} "
+                                f"(Risk: ${risk_usd:.2f} [{risk_pct}% of Balance ${curr_info.balance:,.2f}] | "
                                 f"Liquidity SL: {auto_sl} | Target Zone TP: {auto_tp} | 50% BE: {auto_setup.get('breakeven_50pct_price')})"
                             )
-                            ok, res_msg, tickets = execute_three_order_smc_setup(
+                            ok, res_msg = execute_smc_order(
                                 mt5,
                                 supabase,
                                 copier_engine,
                                 profit_guardian,
-                                position_manager,
-                                three_order_executor,
                                 auto_broker,
                                 auto_base,
                                 auto_dir,
                                 auto_vol,
                                 auto_sl,
                                 auto_tp,
-                                setup_id=setup_id,
+                                position_manager=position_manager,
                                 reason=(
-                                    f"Autonomous 3-Order SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}, 3x{auto_vol} Lots) "
+                                    f"Institutional Single-Order SPEC v1.2 ({mcs}/100 Grade {auto_setup['clarity_grade']}, {auto_vol} Lots) "
                                     f"{auto_dir} Confirmed SMC Setup"
                                 ),
                             )
-                            print(f"[AUTO-SMC] {auto_base} 3-Order Result: {res_msg}\n")
+                            print(f"[AUTO-SMC] {auto_base} Execution Result: {res_msg}\n")
                             last_auto_trade_by_symbol[auto_base] = time.time()
-                            if ok:
-                                for t_num in tickets:
-                                    open_by_base.setdefault(auto_base, []).append({"ticket": str(t_num)})
                         else:
                             # Transparent diagnostic reporting of legitimate waiting conditions (PART 2)
                             if not has_active_pos and not bot_paused:
