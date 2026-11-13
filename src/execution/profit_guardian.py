@@ -150,26 +150,20 @@ class ProfitGuardian:
         peak_progress_to_tp = (peak_gain / target_profit_dist) if target_profit_dist > 0 else 0.0
         best_progress = max(progress_to_tp, peak_progress_to_tp)
 
-        # Stage 1A: Early Zero-Loss Breakeven Shield at 25% of TP or breakeven_r
-        reached_early_shield = (best_progress >= 0.25 or floating_r >= min(self.breakeven_r, 0.30))
-        reached_50pct_of_tp = (best_progress >= 0.50 or floating_r >= self.breakeven_r)
+        # Stage 1A: Systematic Break-Even Protection at 50% of Planned TP (or 1.0R)
+        # Give position full room to develop without choking at 25 cents.
+        reached_50pct_of_tp = (best_progress >= 0.50 or floating_r >= max(self.breakeven_r, 1.0))
 
-        if (reached_early_shield or reached_50pct_of_tp) and not state.breakeven_activated:
-            buffer = 0.25 if "XAU" in state.symbol.upper() else 8.0
+        if reached_50pct_of_tp and not state.breakeven_activated:
+            buffer = 0.80 if "XAU" in state.symbol.upper() else 15.0
             new_be = state.entry_price + buffer if is_bullish else state.entry_price - buffer
             if _improves_sl(new_be):
                 proposed_sl = new_be
                 state.breakeven_activated = True
-                if reached_50pct_of_tp:
-                    reason = (
-                        f"BREAKEVEN_50PCT_TP: Trade reached {best_progress*100:.1f}% "
-                        f"of intended profit target ({floating_r:.2f}R). SL moved to entry + buffer."
-                    )
-                else:
-                    reason = (
-                        f"ZERO_LOSS_SHIELD: Day-trade reached {best_progress*100:.1f}% of TP "
-                        f"({floating_r:.2f}R). SL moved to entry + buffer so position cannot lose."
-                    )
+                reason = (
+                    f"BREAKEVEN_50PCT_TP: Trade reached {best_progress*100:.1f}% "
+                    f"of intended profit target ({floating_r:.2f}R). SL moved to entry + spread buffer."
+                )
 
         # Stage 1B: At 50% of Intended Profit Target, lock +20% of TP distance in guaranteed profit!
         if best_progress >= 0.50 and target_profit_dist > 0:

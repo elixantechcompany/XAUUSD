@@ -497,41 +497,27 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
             if (is_bullish_setup and cand_sl < entry_price) or ((not is_bullish_setup) and cand_sl > entry_price):
                 liquidity_candle_sl = round(cand_sl, 2)
 
-    # Safe structural bounds so SL sits accurately on the liquidity sweep candle without being inside spread noise
-    min_sl_dist = max(atr_val * 0.55, 3.20 if is_xau else 120.0)
-    max_sl_dist = max(atr_val * 1.50, 10.50 if is_xau else 450.0)
-    # Safe structural bounds so SL sits accurately on the liquidity sweep candle without being inside spread noise.
-    # On micro accounts (< $100 equity), adapt SL distance so 3x 0.01 lot orders stay within the safe risk ceiling ($15.00 max risk).
-    acct = mt5.account_info()
-    acct_equity = float(acct.equity) if acct else 1000.0
-    if is_xau:
-        min_sl_dist = 2.80
-        if acct_equity < 100.0:
-            # 3 orders of 0.01 lots = 0.03 oz. At $4.20 SL, combined risk is $12.60 <= $15.00 micro ceiling.
-            max_sl_dist = 4.20
-        else:
-            max_sl_dist = max(atr_val * 1.50, 10.50)
-    else:
-        min_sl_dist = 120.0
-        max_sl_dist = 450.0
-
+    # R35/R36: Stop Loss MUST be placed beyond the Liquidity Sweep Candle's Extreme Wick (not an arbitrary fixed distance!)
     if liquidity_candle_sl is not None:
-        raw_dist = abs(entry_price - liquidity_candle_sl)
-        clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
+        initial_sl = liquidity_candle_sl
     else:
-        # Fallback to most recent confirmed swing low/high candle wick
+        # Fallback to confirmed swing high/low wick extreme + protective buffer
+        buf = max(atr_val * 0.08, 0.60 if is_xau else 20.0)
         if is_bullish_setup:
             sw_low = swing_det.latest_swing_low(m15_candles or h1_candles)
-            ref_low = sw_low.level if (sw_low and sw_low.level < entry_price) else (entry_price - min_sl_dist)
-            raw_dist = abs(entry_price - (ref_low - atr_val * 0.08))
+            ref_low = sw_low.level if (sw_low and sw_low.level < entry_price) else (entry_price - 4.5)
+            initial_sl = round(ref_low - buf, 2)
         else:
             sw_high = swing_det.latest_swing_high(m15_candles or h1_candles)
-            ref_high = sw_high.level if (sw_high and sw_high.level > entry_price) else (entry_price + min_sl_dist)
-            raw_dist = abs((ref_high + atr_val * 0.08) - entry_price)
-        clamped_dist = max(min_sl_dist, min(raw_dist, max_sl_dist))
+            ref_high = sw_high.level if (sw_high and sw_high.level > entry_price) else (entry_price + 4.5)
+            initial_sl = round(ref_high + buf, 2)
 
-    initial_sl = round(entry_price - clamped_dist if is_bullish_setup else entry_price + clamped_dist, 2)
+    # Broker minimum stop distance constraint (stops_level * point + spread buffer)
+    broker_min_dist = max((stops_level * point) + (spread_usd * 1.5), 1.50 if is_xau else 40.0)
     sl_distance = round(abs(entry_price - initial_sl), 2)
+    if sl_distance < broker_min_dist:
+        initial_sl = round(entry_price - broker_min_dist if is_bullish_setup else entry_price + broker_min_dist, 2)
+        sl_distance = broker_min_dist
 
     # 6. R40-R42 & R101-R103: Target Zone (Demand / Supply / Liquidity Zone) Take Profit Placement
     # Places Take Profit directly at the nearest unmitigated opposing institutional zone
@@ -1837,39 +1823,7 @@ def main():
                         last_auto_trade_by_symbol[base_sym_name] = 0.0
                         continue
 
-                    # 1. Sudden Market Structure Reversal (CHoCH) Check:
-                    # If the market suddenly changes structure against an open profitable order,
-                    # automatically close the profitable order immediately and wait for the next setup!
-                    structure_flipped_against_pos = (
-                        (is_pos_buy and (ref_setup.get("smc_direction") == "BEARISH" or ref_setup.get("sudden_bearish_choch")))
-                        or ((not is_pos_buy) and (ref_setup.get("smc_direction") == "BULLISH" or ref_setup.get("sudden_bullish_choch")))
-                    )
-                    if net_profit_usd > 0.05 and structure_flipped_against_pos:
-                        print(
-                            f"\n[STRUCTURE REVERSAL EXIT] Market structure suddenly shifted against profitable "
-                            f"{'BUY' if is_pos_buy else 'SELL'} Position #{p.ticket} ({p.symbol})! "
-                            f"Automatically closing in profit (+${net_profit_usd:.2f}) and vigorously scanning for next setup."
-                        )
-                        close_position_mt5(
-                            mt5, supabase, copier_engine, profit_guardian,
-                            ticket=p.ticket, close_reason="CHOCH_PROFIT_EXIT"
-                        )
-                        last_auto_trade_by_symbol[base_sym_name] = time.time()
-                        continue
-
-                    # 2. Check Profit Harvester: bank accumulated profit on sharp pullback
-                    should_harvest, harvest_reason = profit_guardian.should_harvest_profit(
-                        p.ticket, float(p.price_current), net_profit_usd
-                    )
-                    if should_harvest:
-                        print(f"\n[PROFIT HARVESTER] Position #{p.ticket}: {harvest_reason}")
-                        close_position_mt5(
-                            mt5, supabase, copier_engine, profit_guardian,
-                            ticket=p.ticket, close_reason="PROFIT_HARVEST"
-                        )
-                        last_auto_trade_by_symbol[base_sym_name] = time.time()
-                        continue
-
+                    # Let valid profitable setups run to their planned Take Profit (1:2 to 1:3 RR)
                     # Dynamic Break-Even Management via PositionManagementEngine (PART 1: FIXED_25, FIXED_50, FIXED_70, ADAPTIVE)
                     cur_market_price = float(p.price_current)
                     sym_info = mt5.symbol_info(p.symbol)

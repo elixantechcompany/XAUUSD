@@ -194,12 +194,19 @@ class ThreeOrderExecutor:
         if account_equity >= 500.0:
             allowed_max_risk_usd = round(account_equity * (max_risk_pct / 100.0) * 1.05, 2)
         else:
-            micro_limit = min(account_equity * 0.35, 15.0)
+            micro_limit = max(min(account_equity * 0.35, 20.0), 15.0)
             allowed_max_risk_usd = max(round(account_equity * (max_risk_pct / 100.0) * 1.05, 2), micro_limit)
+
+        num_orders = 3
+        if account_equity < 500.0 and common_lot_size <= 0.01 and total_combined_risk > allowed_max_risk_usd and risk_per_order > 0:
+            # Micro-account adaptation: scale order count (1-3) to fit account budget without compromising structural SL beyond sweep wick
+            num_orders = max(1, min(3, int(allowed_max_risk_usd / risk_per_order)))
+            total_combined_volume = round(common_lot_size * num_orders, 2)
+            total_combined_risk = round(total_combined_volume * risk_per_lot, 2)
 
         if total_combined_risk > allowed_max_risk_usd and allowed_max_risk_usd > 0:
             return False, None, (
-                f"Combined exposure rejection: 3 orders of {common_lot_size} lots = {total_combined_volume} lots. "
+                f"Combined exposure rejection: {num_orders} orders of {common_lot_size} lots = {total_combined_volume} lots. "
                 f"Total risk ${total_combined_risk:.2f} exceeds allowed risk ceiling ${allowed_max_risk_usd:.2f} "
                 f"({max_risk_pct}% of equity ${account_equity:.2f})."
             )
@@ -210,13 +217,13 @@ class ThreeOrderExecutor:
         )
         if account_free_margin > 0 and est_margin_needed > (account_free_margin * 0.35):
             return False, None, (
-                f"Insufficient margin for 3 orders: requires ~${est_margin_needed:.2f} margin "
+                f"Insufficient margin for {num_orders} orders: requires ~${est_margin_needed:.2f} margin "
                 f"which exceeds safe allowance of free margin (${account_free_margin:.2f})."
             )
 
         group_id = f"grp_{setup_id}_{int(time.time())}"
         order_specs: list[SingleOrderSpec] = []
-        for idx in range(1, 4):
+        for idx in range(1, num_orders + 1):
             ord_id = f"{group_id}_ord{idx}"
             client_id = f"{setup_id}-ord{idx}"
             spec = SingleOrderSpec(
