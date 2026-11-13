@@ -45,12 +45,15 @@ export type ExecutionMode = "paper" | "demo";
 export type Session = "Asia" | "London" | "NewYork" | "Overlap";
 export type QualityGrade = "A" | "B" | "C";
 export type CommandType =
+  | "START"
+  | "START_ENGINE"
   | "PAUSE"
   | "RESUME"
   | "NEWS_LOCK"
   | "KILL"
   | "CLOSE_ALL"
   | "RESTART"
+  | "RESTART_ENGINE"
   | "REGISTER_CHILD_ACCOUNT"
   | "CONFIGURE_MASTER"
   | "EXECUTE_TRADE"

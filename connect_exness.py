@@ -500,6 +500,20 @@ def extract_live_smc_setup(mt5, symbol_name: str, base_asset: str):
     # Safe structural bounds so SL sits accurately on the liquidity sweep candle without being inside spread noise
     min_sl_dist = max(atr_val * 0.55, 3.20 if is_xau else 120.0)
     max_sl_dist = max(atr_val * 1.50, 10.50 if is_xau else 450.0)
+    # Safe structural bounds so SL sits accurately on the liquidity sweep candle without being inside spread noise.
+    # On micro accounts (< $100 equity), adapt SL distance so 3x 0.01 lot orders stay within the safe risk ceiling ($15.00 max risk).
+    acct = mt5.account_info()
+    acct_equity = float(acct.equity) if acct else 1000.0
+    if is_xau:
+        min_sl_dist = 2.80
+        if acct_equity < 100.0:
+            # 3 orders of 0.01 lots = 0.03 oz. At $4.20 SL, combined risk is $12.60 <= $15.00 micro ceiling.
+            max_sl_dist = 4.20
+        else:
+            max_sl_dist = max(atr_val * 1.50, 10.50)
+    else:
+        min_sl_dist = 120.0
+        max_sl_dist = 450.0
 
     if liquidity_candle_sl is not None:
         raw_dist = abs(entry_price - liquidity_candle_sl)
@@ -1664,9 +1678,19 @@ def main():
 
                 # 2. Extract live multi-directional setups for both BTC and Gold
                 btc_setup = extract_live_smc_setup(mt5, btc_sym, "BTCUSD")
+                # 2. Extract live multi-directional setups for Gold (Gold only - Bitcoin permanently condemned)
                 xau_setup = extract_live_smc_setup(mt5, xau_sym, "XAUUSD")
+                btc_setup = {
+                    "status": "CONDEMNED",
+                    "direction": "PERMANENTLY_DISABLED",
+                    "clarity_score": 0,
+                    "status_label": "CONDEMNED",
+                    "status_state": "CONDEMNED",
+                    "reasoning": "Bitcoin permanently condemned by user policy.",
+                }
 
                 active_setup = btc_setup if symbol == "BTCUSD" else xau_setup
+                active_setup = xau_setup
 
                 # 3. Extract active open positions from MT5 and apply Profit Guardian
                 positions = mt5.positions_get() or ()
@@ -2036,8 +2060,10 @@ def main():
                                 print(f"[CONTROL] {res_msg}")
 
                             elif cmd_type == "RESUME":
+                            elif cmd_type in ("RESUME", "START", "START_ENGINE"):
                                 bot_paused = False
                                 res_msg = "Autonomous entries RESUMED by user."
+                                res_msg = "Autonomous entries STARTED / RESUMED by user."
                                 print(f"[CONTROL] {res_msg}")
 
                             elif cmd_type in ("RESTART", "RESTART_ENGINE"):
