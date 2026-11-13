@@ -253,11 +253,13 @@ class ProfitGuardian:
         if current_profit_usd <= 0.10:
             return False, ""
 
-        # If peak profit reached >= $0.45 (or >= 0.45R) and gave back >= 30% of peak profit
-        if state.peak_profit_usd >= 0.45 or state.peak_r >= 0.45:
+        # Meaningful Harvest Protection:
+        # Only harvest accumulated profits after position reaches at least 1.2R (or >= $2.50 on micro lots)
+        # AND gives back >= 40% from its peak, allowing 1:2 to 1:3 RR targets to develop without noise exits.
+        if (state.peak_r >= 1.2 or state.peak_profit_usd >= 2.50):
             giveback = state.peak_profit_usd - current_profit_usd
             giveback_pct = (giveback / state.peak_profit_usd) if state.peak_profit_usd > 0 else 0.0
-            if giveback_pct >= 0.30:
+            if giveback_pct >= 0.40:
                 return True, (
                     f"PROFIT HARVEST: Banking +${current_profit_usd:.2f} after {giveback_pct*100:.0f}% "
                     f"pullback from peak +${state.peak_profit_usd:.2f} ({state.peak_r:.2f}R)"

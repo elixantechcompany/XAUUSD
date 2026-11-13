@@ -1854,7 +1854,7 @@ def main():
                             mt5, supabase, copier_engine, profit_guardian,
                             ticket=p.ticket, close_reason="CHOCH_PROFIT_EXIT"
                         )
-                        last_auto_trade_by_symbol[base_sym_name] = 0.0
+                        last_auto_trade_by_symbol[base_sym_name] = time.time()
                         continue
 
                     # 2. Check Profit Harvester: bank accumulated profit on sharp pullback
@@ -1867,7 +1867,7 @@ def main():
                             mt5, supabase, copier_engine, profit_guardian,
                             ticket=p.ticket, close_reason="PROFIT_HARVEST"
                         )
-                        last_auto_trade_by_symbol[base_sym_name] = 0.0
+                        last_auto_trade_by_symbol[base_sym_name] = time.time()
                         continue
 
                     # Dynamic Break-Even Management via PositionManagementEngine (PART 1: FIXED_25, FIXED_50, FIXED_70, ADAPTIVE)
@@ -2157,8 +2157,8 @@ def main():
                         open_for_sym = len(open_by_base.get(auto_base, []))
                         if open_for_sym >= max_open_per_symbol:
                             continue
-                        # Fast 5-second post-close re-entry readiness so valid entries are never missed!
-                        if (time.time() - last_auto_trade_by_symbol.get(auto_base, 0.0)) <= 5.0:
+                        # 45-second post-close stabilization cooldown prevents rapid-fire chasing at candle extremes!
+                        if (time.time() - last_auto_trade_by_symbol.get(auto_base, 0.0)) <= 45.0:
                             continue
 
                         # Enforce SPEC v1.2: Clarity >= 65 AND (breakout trigger fired OR closed-candle market confirmation)
